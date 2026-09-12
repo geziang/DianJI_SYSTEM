@@ -1,0 +1,32 @@
+# ===== Keil MDK 构建产物 =====
+MDK-ARM/STM32F103C8T6_BASE/
+*.o
+*.d
+*.crf
+*.axf
+*.hex
+*.bin
+*.map
+*.sct
+*.lnp
+*.htm
+*.dep
+*.iex
+
+# ===== Keil 用户/界面状态 =====
+*.uvguix.*
+*.Bak
+*.bak
+*.scvd
+*.dbgconf.user
+
+# ===== 日志 =====
+*.log
+MDK-ARM/build_log.txt
+MDK-ARM/startup_stm32f103xb.lst
+
+# ===== 系统/编辑器杂项 =====
+Thumbs.db
+Desktop.ini
+*.swp
+*~
