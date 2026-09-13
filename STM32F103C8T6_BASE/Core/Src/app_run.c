@@ -15,6 +15,7 @@
 #include "encoder_cache.h"
 #include "foc_angle_math.h"
 #include "foc_params.h"
+#include "foc_pi.h"
 #include "foc_precompute.h"
 #include "foc_rotor_model.h"
 #include "foc_runtime.h"
@@ -22,7 +23,9 @@
 #include "motor_drv.h"
 #include "motor_pwm.h"
 #include "safety_manager.h"
+#include "speed_estimate.h"
 
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -35,16 +38,42 @@
 #define RUN_ENC_VALID_MS    (20U)   /* 编码器新鲜度门（同 PSEQ 判决口径） */
 #define RUN_IQ_LIMIT_A      (0.5f)  /* iq 指令限幅：守工程窗口 0.2-0.6A 上沿 */
 
+/* ---- 速度环首版（SPEC-RUN FR-4.2/4.3/4.4；FR-4.5 阈值待整定回填） ---- */
+#define RUN_SPEED_LIMIT_RPM    (300.0f) /* 目标限幅：避开 400rpm 电压饱和与编码器高速掉线区 */
+#define RUN_SPEED_SLEW_RPM_S   (500.0f) /* 目标斜坡（FR-4.3 加速度限首版值） */
+#define RUN_OVERSPEED_RPM      (450.0f) /* 超速保护（FR-4.4） */
+#define RUN_SPEED_KP_INIT      (0.005f) /* A/rpm：按 ~2000rpm/A 开环增益与 0.5A 饱和估，待整定 */
+#define RUN_SPEED_KI_INIT      (0.025f) /* A/(rpm·s)，待整定 */
+#define RUN_SPEED_STEP_RPM     (20.0f)
+#define RUN_SPEED_TICK_S       (0.001f) /* 速度外环拍周期=主循环 1ms */
+#define RUN_RPS_TO_RPM         (9.5493f)
+#define RUN_GAIN_RATIO         (1.25f)  /* 1..4 键增益调节倍率 */
+
+typedef enum
+{
+  APP_RUN_MODE_IQ = 0,    /* 手动 iq 阶梯（诊断用，FOC-4 已验证） */
+  APP_RUN_MODE_SPEED      /* 速度闭环 */
+} app_run_mode_t;
+
 static app_run_state_t app_run_state = APP_RUN_STATE_BOOT;
 static foc_parameter_set_t app_run_parameters;
 static motor_parameter_package_t app_run_package;
 static uint8_t app_run_has_package = 0U;
 static uint32_t app_run_tlm_ms = 0U;
 static float app_run_iq_target_a = 0.0f;
-static float app_run_last_mech_rad = 0.0f;
-static float app_run_mech_accum_rad = 0.0f;
-static uint8_t app_run_have_last_mech = 0U;
+static app_run_mode_t app_run_mode = APP_RUN_MODE_IQ;
+static speed_estimator_t app_run_speed_est;
+static foc_pi_state_t app_run_speed_pi;
+static float app_run_speed_kp = RUN_SPEED_KP_INIT;
+static float app_run_speed_ki = RUN_SPEED_KI_INIT;
+static float app_run_speed_target_rpm = 0.0f;
+static float app_run_speed_cmd_rpm = 0.0f;    /* 斜坡后的实际指令 */
+static float app_run_speed_iq_ref = 0.0f;     /* 速度 PI 输出 */
+static uint32_t app_run_stall_ms = 0U;
+static uint32_t app_run_wrong_dir_ms = 0U;
 static uint32_t app_run_hint_ms = 0U;
+
+static void app_run_speed_pi_configure(void);
 
 /* 格式化日志（debug_log_write_line 只收成品串，同 baseline_diag_logf 做法）。 */
 static void app_run_logf(const char *fmt, ...)
@@ -233,13 +262,77 @@ static uint8_t app_run_enable(void)
     app_run_set_state(APP_RUN_STATE_FAULT);
     return 0U;
   }
-  app_run_have_last_mech = 0U;
-  app_run_mech_accum_rad = 0.0f;
   app_run_iq_target_a = 0.0f;
+  speed_estimator_init(&app_run_speed_est);
+  app_run_speed_target_rpm = 0.0f;
+  app_run_speed_cmd_rpm = 0.0f;
+  app_run_speed_iq_ref = 0.0f;
+  app_run_stall_ms = 0U;
+  app_run_wrong_dir_ms = 0U;
+  app_run_speed_pi_configure();
   app_run_tlm_ms = HAL_GetTick();
   debug_log_write_line("[RUN] enabled: zero-current hold (id=0 iq=0)");
   app_run_set_state(APP_RUN_STATE_ENABLED);
   return 1U;
+}
+
+/* 速度 PI 装载：在线改增益必须整装（ki_times_t 重预算 + 积分清零，
+ * 后者本就是增益调整的标准做法）。 */
+static void app_run_speed_pi_configure(void)
+{
+  foc_pi_config_t cfg;
+
+  cfg.kp = app_run_speed_kp;
+  cfg.ki = app_run_speed_ki;
+  cfg.ki_times_t = app_run_speed_ki * RUN_SPEED_TICK_S;
+  cfg.integrator_min = -RUN_IQ_LIMIT_A;
+  cfg.integrator_max = RUN_IQ_LIMIT_A;
+  cfg.output_min = -RUN_IQ_LIMIT_A;
+  cfg.output_max = RUN_IQ_LIMIT_A;
+  foc_pi_init(&app_run_speed_pi, &cfg);
+}
+
+static void app_run_speed_step(float delta_rpm)
+{
+  if (app_run_state != APP_RUN_STATE_ENABLED)
+  {
+    debug_log_write_line("[CMD] speed command only while ENABLED");
+    return;
+  }
+  app_run_speed_target_rpm += delta_rpm;
+  if (app_run_speed_target_rpm > RUN_SPEED_LIMIT_RPM)
+  {
+    app_run_speed_target_rpm = RUN_SPEED_LIMIT_RPM;
+  }
+  if (app_run_speed_target_rpm < -RUN_SPEED_LIMIT_RPM)
+  {
+    app_run_speed_target_rpm = -RUN_SPEED_LIMIT_RPM;
+  }
+  app_run_logf("[CMD] n*=%+.0frpm (slew %.0frpm/s)",
+               (double)app_run_speed_target_rpm,
+               (double)RUN_SPEED_SLEW_RPM_S);
+}
+
+/* which: 0=kp 1=ki；增益在线调节（1..4 键），改后整装 PI。 */
+static void app_run_gain_step(uint8_t which, uint8_t up)
+{
+  float ratio = (up != 0U) ? RUN_GAIN_RATIO : (1.0f / RUN_GAIN_RATIO);
+
+  if (which == 0U)
+  {
+    app_run_speed_kp *= ratio;
+    if (app_run_speed_kp < 1e-4f) { app_run_speed_kp = 1e-4f; }
+    if (app_run_speed_kp > 1.0f) { app_run_speed_kp = 1.0f; }
+  }
+  else
+  {
+    app_run_speed_ki *= ratio;
+    if (app_run_speed_ki < 1e-4f) { app_run_speed_ki = 1e-4f; }
+    if (app_run_speed_ki > 10.0f) { app_run_speed_ki = 10.0f; }
+  }
+  app_run_speed_pi_configure();
+  app_run_logf("[CMD] speed PI kp=%.4f ki=%.3f",
+               (double)app_run_speed_kp, (double)app_run_speed_ki);
 }
 
 /* FOC-4 第 2-5 步：iq 步进指令（工程窗口内大激励，id 恒 0）。 */
@@ -316,23 +409,80 @@ static void app_run_handle_command(uint8_t command)
       break;
     case '+':
     case '=':
-      app_run_iq_step(0.05f);
+      if (app_run_mode == APP_RUN_MODE_SPEED)
+      {
+        app_run_speed_step(RUN_SPEED_STEP_RPM);
+      }
+      else
+      {
+        app_run_iq_step(0.05f);
+      }
       break;
     case '-':
     case '_':
-      app_run_iq_step(-0.05f);
+      if (app_run_mode == APP_RUN_MODE_SPEED)
+      {
+        app_run_speed_step(-RUN_SPEED_STEP_RPM);
+      }
+      else
+      {
+        app_run_iq_step(-0.05f);
+      }
       break;
     case '0':
-      if (app_run_state == APP_RUN_STATE_ENABLED)
+      if (app_run_state != APP_RUN_STATE_ENABLED)
+      {
+        debug_log_write_line("[CMD] current command only while ENABLED");
+      }
+      else if (app_run_mode == APP_RUN_MODE_SPEED)
+      {
+        app_run_speed_target_rpm = 0.0f;
+        debug_log_write_line("[CMD] n*=+0rpm");
+      }
+      else
       {
         app_run_iq_target_a = 0.0f;
         foc_runtime_set_current_target(0.0f, 0.0f);
         debug_log_write_line("[CMD] target id=0.00A iq=+0.00A");
       }
+      break;
+    case 's':
+    case 'S':
+      if (app_run_mode == APP_RUN_MODE_SPEED)
+      {
+        app_run_mode = APP_RUN_MODE_IQ;
+        app_run_iq_target_a = 0.0f;
+        if (app_run_state == APP_RUN_STATE_ENABLED)
+        {
+          foc_runtime_set_current_target(0.0f, 0.0f);
+        }
+        debug_log_write_line("[CMD] mode=IQ (+/- step 0.05A)");
+      }
       else
       {
-        debug_log_write_line("[CMD] current command only while ENABLED");
+        app_run_mode = APP_RUN_MODE_SPEED;
+        app_run_speed_target_rpm = 0.0f;
+        app_run_speed_cmd_rpm = 0.0f;
+        app_run_speed_iq_ref = 0.0f;
+        app_run_speed_pi_configure();
+        if (app_run_state == APP_RUN_STATE_ENABLED)
+        {
+          foc_runtime_set_current_target(0.0f, 0.0f);
+        }
+        debug_log_write_line("[CMD] mode=SPEED (+/- step 20rpm, ramp to target)");
       }
+      break;
+    case '1':
+      app_run_gain_step(0U, 1U);
+      break;
+    case '2':
+      app_run_gain_step(0U, 0U);
+      break;
+    case '3':
+      app_run_gain_step(1U, 1U);
+      break;
+    case '4':
+      app_run_gain_step(1U, 0U);
       break;
     default:
       break;
@@ -346,6 +496,7 @@ static void app_run_tick(uint32_t now_ms)
   const encoder_cache_sample_t *enc;
   const foc_control_output_t *output;
   float mech_rad;
+  float mech_rpm;
 
   switch (app_run_state)
   {
@@ -406,34 +557,106 @@ static void app_run_tick(uint32_t now_ms)
        * R3 正式实现改 ISR 内编码器连续出角。 */
       foc_runtime_set_forced_angle(rotor.electrical_angle_rad);
 
-      /* 转速：逐拍(1ms)累加圆周回绕位移再按遥测窗折算——500ms 直接差分
-       * 高速下混叠，且 wrap_signed 保证跨 2π 正确（修复 2026-09-13：
-       * 旧版 dt 用 state_tick 且不回绕，读数随时间缩小且跳变）。 */
+      /* 速度估计（FR-4.1，16ms 滑窗回绕差分）+ 超速保护（FR-4.4，两模式通用） */
       mech_rad = foc_mechanical_raw_to_rad(enc->raw_angle);
-      if (app_run_have_last_mech != 0U)
+      speed_estimator_update(&app_run_speed_est, mech_rad, RUN_SPEED_TICK_S);
+      mech_rpm = speed_estimator_get_rad_s(&app_run_speed_est, RUN_SPEED_TICK_S) *
+                 RUN_RPS_TO_RPM;
+      if ((speed_estimator_valid(&app_run_speed_est) != 0U) &&
+          (fabsf(mech_rpm) > RUN_OVERSPEED_RPM))
       {
-        app_run_mech_accum_rad +=
-            foc_angle_wrap_signed_rad(mech_rad - app_run_last_mech_rad);
+        app_run_safe_disable();
+        app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f)",
+                     (double)mech_rpm, (double)RUN_OVERSPEED_RPM);
+        app_run_set_state(APP_RUN_STATE_FAULT);
+        break;
       }
-      app_run_last_mech_rad = mech_rad;
-      app_run_have_last_mech = 1U;
+
+      if (app_run_mode == APP_RUN_MODE_SPEED)
+      {
+        /* 目标斜坡（FR-4.3）：阶跃经 500rpm/s 爬坡，禁止直接反打。 */
+        float step_rpm = RUN_SPEED_SLEW_RPM_S * RUN_SPEED_TICK_S;
+        uint8_t est_ok = speed_estimator_valid(&app_run_speed_est);
+
+        if (app_run_speed_cmd_rpm < (app_run_speed_target_rpm - step_rpm))
+        {
+          app_run_speed_cmd_rpm += step_rpm;
+        }
+        else if (app_run_speed_cmd_rpm > (app_run_speed_target_rpm + step_rpm))
+        {
+          app_run_speed_cmd_rpm -= step_rpm;
+        }
+        else
+        {
+          app_run_speed_cmd_rpm = app_run_speed_target_rpm;
+        }
+
+        if (est_ok != 0U)
+        {
+          app_run_speed_iq_ref =
+              foc_pi_update(&app_run_speed_pi, app_run_speed_cmd_rpm - mech_rpm);
+          foc_runtime_set_current_target(0.0f, app_run_speed_iq_ref);
+        }
+
+        /* 失速保护（FR-4.4）：iq 顶限 1s 不动而目标在动。 */
+        if ((est_ok != 0U) && (fabsf(app_run_speed_iq_ref) >= 0.45f) &&
+            (fabsf(mech_rpm) < 10.0f) &&
+            (fabsf(app_run_speed_cmd_rpm) > 50.0f))
+        {
+          app_run_stall_ms += 1U;
+        }
+        else
+        {
+          app_run_stall_ms = 0U;
+        }
+        if (app_run_stall_ms >= 1000U)
+        {
+          app_run_safe_disable();
+          debug_log_write_line("[FAULT] speed stall: iq at limit, no motion");
+          app_run_set_state(APP_RUN_STATE_FAULT);
+          break;
+        }
+
+        /* 方向矛盾保护（FR-4.4）。 */
+        if ((est_ok != 0U) && (fabsf(app_run_speed_cmd_rpm) > 50.0f) &&
+            (fabsf(mech_rpm) > 30.0f) &&
+            ((mech_rpm * app_run_speed_cmd_rpm) < 0.0f))
+        {
+          app_run_wrong_dir_ms += 1U;
+        }
+        else
+        {
+          app_run_wrong_dir_ms = 0U;
+        }
+        if (app_run_wrong_dir_ms >= 500U)
+        {
+          app_run_safe_disable();
+          debug_log_write_line("[FAULT] speed direction mismatch");
+          app_run_set_state(APP_RUN_STATE_FAULT);
+          break;
+        }
+      }
 
       if ((uint32_t)(now_ms - app_run_tlm_ms) >= RUN_TLM_PERIOD_MS)
       {
-        float dt_s;
-        float rpm;
-
-        dt_s = (float)(now_ms - app_run_tlm_ms) / 1000.0f; /* 先取 dt 再刷新时刻 */
         app_run_tlm_ms = now_ms;
         output = foc_runtime_get_last_output();
-        rpm = (dt_s > 0.0f) ? (app_run_mech_accum_rad / dt_s) *
-                              (60.0f / 6.28318530718f) : 0.0f;
-        app_run_mech_accum_rad = 0.0f;
-        app_run_logf("[RUN] id=%.3fA iq=%.3fA iq*=%+.2fA n=%.0frpm",
-                     (double)output->measured_current_a.d,
-                     (double)output->measured_current_a.q,
-                     (double)app_run_iq_target_a,
-                     (double)rpm);
+        if (app_run_mode == APP_RUN_MODE_SPEED)
+        {
+          app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.0f n*=%.0frpm",
+                       (double)output->measured_current_a.d,
+                       (double)output->measured_current_a.q,
+                       (double)mech_rpm,
+                       (double)app_run_speed_cmd_rpm);
+        }
+        else
+        {
+          app_run_logf("[RUN] id=%.3fA iq=%.3fA iq*=%+.2fA n=%.0frpm",
+                       (double)output->measured_current_a.d,
+                       (double)output->measured_current_a.q,
+                       (double)app_run_iq_target_a,
+                       (double)mech_rpm);
+        }
       }
       break;
 
@@ -457,7 +680,7 @@ void app_run_init(void)
   debug_log_write_line("STM32F103C8T6 motor run " APP_RUN_VERSION);
   debug_log_write_line("build: " __DATE__ " " __TIME__);
   debug_log_write_line("safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot");
-  debug_log_write_line("cmds: p=enable x=stop c=clear(fault) i/?=diag +/-=iq-step(0.05A) 0=zero-target");
+  debug_log_write_line("cmds: p=enable x=stop c=clear(fault) i/?=diag s=mode +/-=step 0=zero 1..4=speed-PI-gain");
 
   safety_manager_init();
   encoder_cache_init();
