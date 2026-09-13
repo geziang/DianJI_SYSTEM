@@ -133,11 +133,13 @@ void app_run_load_package(const motor_parameter_package_t *package)
   app_run_parameters.id_pi.ki = app_run_package.id_ki;
   app_run_parameters.iq_pi.kp = app_run_package.iq_kp;
   app_run_parameters.iq_pi.ki = app_run_package.iq_ki;
-  /* DD-01 契约：运行态 phase_map 从固化包取，不经测试参数集。 */
+  /* DD-01 契约：运行态 phase_map 从固化包取，不经测试参数集。
+   * 注意 direction_verified 不在此处置位——本函数运行于 safety_manager
+   * PARAMETER_CHECK 阶段，随后的 ADC_ZERO_REFRESH 会 reset_diagnostic()
+   * 把它洗掉（2026-09-13 上板实测）；改在 BOOT→READY 准入通过时置位。 */
   app_run_parameters.phase_map.phase_a_output = app_run_package.phase_map_a;
   app_run_parameters.phase_map.phase_b_output = app_run_package.phase_map_b;
   app_run_parameters.phase_map.phase_c_output = app_run_package.phase_map_c;
-  motor_adc_set_direction_verified(1U);
 
   (void)snprintf(line, sizeof(line),
                  "[LOAD] run package (rev=%lu): R=%.3fohm L=%.2fuH offset=%+.4frad "
@@ -204,11 +206,29 @@ static uint8_t app_run_enable(void)
   (void)foc_rotor_model_convert(&app_run_parameters.rotor, enc->raw_angle, &rotor);
   foc_runtime_set_forced_angle(rotor.electrical_angle_rad);
   foc_runtime_set_current_target(0.0f, 0.0f); /* 零流目标：FOC-4 第一步 */
-  if ((motor_pwm_start_test_output() != MOTOR_PWM_STATUS_OK) ||
-      (motor_drv_enable_for_test() != MOTOR_DRV_STATUS_OK) ||
-      (foc_runtime_start() != FOC_STATUS_OK))
+  if (motor_pwm_start_test_output() != MOTOR_PWM_STATUS_OK)
   {
-    debug_log_write_line("[FAULT] run power-up sequence failed");
+    debug_log_write_line("[FAULT] run pwm start failed");
+    app_run_safe_disable();
+    app_run_set_state(APP_RUN_STATE_FAULT);
+    return 0U;
+  }
+  if (motor_drv_enable_for_test() != MOTOR_DRV_STATUS_OK)
+  {
+    debug_log_write_line("[FAULT] run drv enable failed");
+    app_run_safe_disable();
+    app_run_set_state(APP_RUN_STATE_FAULT);
+    return 0U;
+  }
+  if (foc_runtime_start() != FOC_STATUS_OK)
+  {
+    /* 闭环门禁三标志自证：拒绝时直接暴露 closed_loop/scale/dir 状态。 */
+    motor_adc_current_diagnostic_t gate;
+    motor_adc_get_current_diagnostic(&gate);
+    app_run_logf("[FAULT] run runtime start rejected: closed_loop=%u scale=%u dir=%u",
+                 (unsigned)gate.closed_loop_allowed,
+                 (unsigned)gate.scale_verified,
+                 (unsigned)gate.direction_verified);
     app_run_safe_disable();
     app_run_set_state(APP_RUN_STATE_FAULT);
     return 0U;
@@ -306,6 +326,9 @@ static void app_run_tick(uint32_t now_ms)
       {
         break;
       }
+      /* 零偏刷新已结束（quality 刚确认 OK），此刻置位才不会被洗掉；
+       * 包的存在=该板 S1a 已绑定符号（direction 证明）。 */
+      motor_adc_set_direction_verified(1U);
       app_run_set_state(APP_RUN_STATE_READY);
       debug_log_write_line("[READY] p=enable (zero-current) x=stop i=diag");
       break;
