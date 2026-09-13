@@ -11,6 +11,7 @@
 
 #include "baseline_diag.h"
 #include "board_config.h"
+#include "calib_config.h"
 #include "control_loop.h"
 #include "debug_log.h"
 #include "encoder_cache.h"
@@ -47,7 +48,7 @@ void app_baseline_init(void)
   /* 构建身份自证：日志与代码树可对齐（排除 written!=verified，L4 嫌疑①）。 */
   debug_log_write_line("build: " __DATE__ " " __TIME__);
   debug_log_write_line("safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot");
-  debug_log_write_line("cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) v=VJ-diag i/?=diag");
+  debug_log_write_line("cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) i/?=diag");
 
   safety_manager_init();
   encoder_cache_init();
@@ -113,25 +114,30 @@ static void app_baseline_handle_command(uint8_t command)
 {
   control_loop_command_status_t status;
   uint8_t safety_cleared;
+#if CALIB_VJ_DIAG_ENABLE
   uint8_t in_vj;
 
   /* VJ 诊断态优先消费诊断键（d/e/q/w/g），其余键保持原语义。 */
   in_vj = (control_loop_get_state() == CONTROL_LOOP_STATE_VJ_DIAG) ? 1U : 0U;
+#endif
 
   switch (command)
   {
+#if CALIB_VJ_DIAG_ENABLE
     case 'v':
     case 'V':
       status = control_loop_request_vj_start();
       debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
                            "[CMD] VJ armed" : "[CMD] VJ rejected (gate)");
       break;
+#endif
     case 's':
     case 'S':
       debug_log_write_line("[CMD] open-loop path is disabled in identification firmware; use r then p");
       break;
     case 'x':
     case 'X':
+#if CALIB_VJ_DIAG_ENABLE
       if (in_vj != 0U)
       {
         status = control_loop_request_vj_exit();
@@ -139,6 +145,7 @@ static void app_baseline_handle_command(uint8_t command)
                              "[CMD] VJ exit" : "[CMD] VJ rejected (state)");
       }
       else
+#endif
       {
         control_loop_request_stop();
         debug_log_write_line("[CMD] stop requested");
@@ -154,6 +161,7 @@ static void app_baseline_handle_command(uint8_t command)
     case 'p':
     case 'P':
       /* accepted 的启动证据由 control_loop 的 [RUN] 行给出，这里只回显拒绝原因。 */
+#if CALIB_VJ_DIAG_ENABLE
       if (in_vj != 0U)
       {
         status = control_loop_request_vj_power();
@@ -163,6 +171,7 @@ static void app_baseline_handle_command(uint8_t command)
         }
       }
       else
+#endif
       {
         status = control_loop_request_power_confirm();
         if (status != CONTROL_LOOP_COMMAND_ACCEPTED)
@@ -180,6 +189,7 @@ static void app_baseline_handle_command(uint8_t command)
       break;
     case 'd':
     case 'D':
+#if CALIB_VJ_DIAG_ENABLE
       if (in_vj != 0U)
       {
         status = control_loop_request_vj_inject(0U, 1.0f);
@@ -187,6 +197,7 @@ static void app_baseline_handle_command(uint8_t command)
                              "[CMD] VJ pulse" : "[CMD] VJ rejected (state)");
       }
       else
+#endif
       {
         status = control_loop_request_candidate_discard();
         debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
@@ -196,39 +207,47 @@ static void app_baseline_handle_command(uint8_t command)
       break;
     case 'e':
     case 'E':
+#if CALIB_VJ_DIAG_ENABLE
       if (in_vj != 0U)
       {
         status = control_loop_request_vj_inject(0U, -1.0f);
         debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
                              "[CMD] VJ pulse" : "[CMD] VJ rejected (state)");
       }
+#endif
       break;
     case 'q':
     case 'Q':
+#if CALIB_VJ_DIAG_ENABLE
       if (in_vj != 0U)
       {
         status = control_loop_request_vj_inject(1U, 1.0f);
         debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
                              "[CMD] VJ pulse" : "[CMD] VJ rejected (state)");
       }
+#endif
       break;
     case 'w':
     case 'W':
+#if CALIB_VJ_DIAG_ENABLE
       if (in_vj != 0U)
       {
         status = control_loop_request_vj_inject(1U, -1.0f);
         debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
                              "[CMD] VJ pulse" : "[CMD] VJ rejected (state)");
       }
+#endif
       break;
     case 'g':
     case 'G':
+#if CALIB_VJ_DIAG_ENABLE
       if (in_vj != 0U)
       {
         status = control_loop_request_vj_sweep();
         debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
                              "[CMD] VJ sweep" : "[CMD] VJ rejected (state)");
       }
+#endif
       break;
     case 'c':
     case 'C':
@@ -253,6 +272,8 @@ static void app_baseline_handle_command(uint8_t command)
       break;
     case 'i':
     case 'I':
+      /* 全量静态诊断明细按需输出（上电仅一行汇总，PASS 静默/FAIL 必打）。 */
+      baseline_diag_run_verbose_pipeline();
       app_baseline_log_current_diagnostic();
       break;
     case '?':

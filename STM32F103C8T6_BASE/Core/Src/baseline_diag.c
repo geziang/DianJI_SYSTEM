@@ -50,6 +50,10 @@ static baseline_diag_mode_t baseline_diag_mode = BASELINE_DIAG_DEFAULT_MODE;
 /* 最近一次流水线或监视检查的综合结果。 */
 static baseline_diag_result_t baseline_diag_last_result = BASELINE_DIAG_RESULT_PASS;
 
+/* 静默模式（2026-09-13 ROM 瘦身）：上电流水线 PASS 明细不打、只打一行汇总；
+ * WARN/FAIL 明细必打（出问题统一打印）；`i` 命令经 verbose API 临时全量输出。 */
+static uint8_t baseline_diag_quiet = 1U;
+
 #if BASELINE_DIAG_PERIODIC_LOG_ENABLE
 /* 上次输出周期监视日志的 HAL tick。 */
 static uint32_t baseline_diag_last_monitor_tick = 0U;
@@ -131,14 +135,17 @@ static void baseline_diag_log_zero_samples(void)
                      motor_adc_zero_quality_text(current.zero.quality));
 }
 
-/* 启动信息检查：确认当前版本、模式、PWM 周期和 VBUS 可用性。 */
+/* 启动信息检查：确认当前版本、模式、PWM 周期和 VBUS 可用性（恒 PASS，静默态跳过）。 */
 static baseline_diag_result_t baseline_diag_check_boot(void)
 {
-  baseline_diag_logf("[BOOT] version=%s", APP_BASELINE_VERSION);
-  baseline_diag_logf("[BOOT] mode=%s", baseline_diag_mode_text(baseline_diag_mode));
-  baseline_diag_logf("[BOOT] pwm_timer=TIM2 pwm_period=%lu",
-                     (unsigned long)BOARD_CONFIG_PWM_PERIOD_TICKS);
-  baseline_diag_logf("[BOOT] vbus_adc=unavailable");
+  if (baseline_diag_quiet == 0U)
+  {
+    baseline_diag_logf("[BOOT] version=%s", APP_BASELINE_VERSION);
+    baseline_diag_logf("[BOOT] mode=%s", baseline_diag_mode_text(baseline_diag_mode));
+    baseline_diag_logf("[BOOT] pwm_timer=TIM2 pwm_period=%lu",
+                       (unsigned long)BOARD_CONFIG_PWM_PERIOD_TICKS);
+    baseline_diag_logf("[BOOT] vbus_adc=unavailable");
+  }
   return BASELINE_DIAG_RESULT_PASS;
 }
 
@@ -152,9 +159,12 @@ static baseline_diag_result_t baseline_diag_check_drv(void)
   result = (state == MOTOR_DRV_STATE_DISABLED) ?
            BASELINE_DIAG_RESULT_PASS : BASELINE_DIAG_RESULT_FAIL;
 
-  baseline_diag_logf("[DRV] state=%s %s",
-                     motor_drv_is_enabled() != 0U ? "enabled" : "disabled",
-                     baseline_diag_result_text(result));
+  if ((baseline_diag_quiet == 0U) || (result != BASELINE_DIAG_RESULT_PASS))
+  {
+    baseline_diag_logf("[DRV] state=%s %s",
+                       motor_drv_is_enabled() != 0U ? "enabled" : "disabled",
+                       baseline_diag_result_text(result));
+  }
   return result;
 }
 
@@ -175,11 +185,14 @@ static baseline_diag_result_t baseline_diag_check_pwm(void)
   result = ((ch1 == 0U) && (ch2 == 0U) && (ch3 == 0U)) ?
            BASELINE_DIAG_RESULT_PASS : BASELINE_DIAG_RESULT_FAIL;
 
-  baseline_diag_logf("[PWM] ccr=%lu,%lu,%lu %s",
-                     (unsigned long)ch1,
-                     (unsigned long)ch2,
-                     (unsigned long)ch3,
-                     baseline_diag_result_text(result));
+  if ((baseline_diag_quiet == 0U) || (result != BASELINE_DIAG_RESULT_PASS))
+  {
+    baseline_diag_logf("[PWM] ccr=%lu,%lu,%lu %s",
+                       (unsigned long)ch1,
+                       (unsigned long)ch2,
+                       (unsigned long)ch3,
+                       baseline_diag_result_text(result));
+  }
   return result;
 }
 
@@ -224,23 +237,26 @@ static baseline_diag_result_t baseline_diag_check_adc(motor_adc_raw_sample_t *sa
     result = baseline_diag_worse(result, BASELINE_DIAG_RESULT_WARN);
   }
 
-  baseline_diag_logf("[ADC] u=%u v=%u vbus=NA %s",
-                     (unsigned int)sample->phase_u_raw,
-                     (unsigned int)sample->phase_v_raw,
-                     baseline_diag_result_text(result));
-  baseline_diag_logf("[CUR] zero=%u,%u p2p=%u,%u n=%u quality=%s state=%s",
-                     (unsigned int)current.zero.phase_u_zero_raw,
-                     (unsigned int)current.zero.phase_v_zero_raw,
-                     (unsigned int)current.zero.phase_u_peak_to_peak_raw,
-                     (unsigned int)current.zero.phase_v_peak_to_peak_raw,
-                     (unsigned int)current.zero.sample_count,
-                     motor_adc_zero_quality_text(current.zero.quality),
-                     motor_adc_current_state_text(current.state));
-  baseline_diag_logf("[CUR] nominal=3300mV shunt=10mohm gain=50 V/A=500mV verified=%u,%u,%u closed_loop=%u",
-                     (unsigned int)current.scale_verified,
-                     (unsigned int)current.direction_verified,
-                     (unsigned int)current.sample_timing_verified,
-                     (unsigned int)current.closed_loop_allowed);
+  if ((baseline_diag_quiet == 0U) || (result != BASELINE_DIAG_RESULT_PASS))
+  {
+    baseline_diag_logf("[ADC] u=%u v=%u vbus=NA %s",
+                       (unsigned int)sample->phase_u_raw,
+                       (unsigned int)sample->phase_v_raw,
+                       baseline_diag_result_text(result));
+    baseline_diag_logf("[CUR] zero=%u,%u p2p=%u,%u n=%u quality=%s state=%s",
+                       (unsigned int)current.zero.phase_u_zero_raw,
+                       (unsigned int)current.zero.phase_v_zero_raw,
+                       (unsigned int)current.zero.phase_u_peak_to_peak_raw,
+                       (unsigned int)current.zero.phase_v_peak_to_peak_raw,
+                       (unsigned int)current.zero.sample_count,
+                       motor_adc_zero_quality_text(current.zero.quality),
+                       motor_adc_current_state_text(current.state));
+    baseline_diag_logf("[CUR] nominal=3300mV shunt=10mohm gain=50 V/A=500mV verified=%u,%u,%u closed_loop=%u",
+                       (unsigned int)current.scale_verified,
+                       (unsigned int)current.direction_verified,
+                       (unsigned int)current.sample_timing_verified,
+                       (unsigned int)current.closed_loop_allowed);
+  }
   return result;
 }
 
@@ -270,12 +286,15 @@ static baseline_diag_result_t baseline_diag_check_mt6701(mt6701_snapshot_t *snap
     return BASELINE_DIAG_RESULT_FAIL;
   }
 
-  baseline_diag_logf("[ENC] device=MT6701 raw=%u angle=%u.%02u field=%s %s",
-                     (unsigned int)snapshot->raw_angle,
-                     (unsigned int)(snapshot->angle_degrees_x100 / 100U),
-                     (unsigned int)(snapshot->angle_degrees_x100 % 100U),
-                     mt6701_field_status_text(snapshot->field_status),
-                     baseline_diag_result_text(BASELINE_DIAG_RESULT_PASS));
+  if (baseline_diag_quiet == 0U)
+  {
+    baseline_diag_logf("[ENC] device=MT6701 raw=%u angle=%u.%02u field=%s %s",
+                       (unsigned int)snapshot->raw_angle,
+                       (unsigned int)(snapshot->angle_degrees_x100 / 100U),
+                       (unsigned int)(snapshot->angle_degrees_x100 % 100U),
+                       mt6701_field_status_text(snapshot->field_status),
+                       baseline_diag_result_text(BASELINE_DIAG_RESULT_PASS));
+  }
   return BASELINE_DIAG_RESULT_PASS;
 }
 
@@ -292,9 +311,12 @@ static baseline_diag_result_t baseline_diag_check_control(void)
             (state == CONTROL_LOOP_STATE_POWER_ARMED)) ?
            BASELINE_DIAG_RESULT_PASS : BASELINE_DIAG_RESULT_FAIL;
 
-  baseline_diag_logf("[CTRL] state=%s %s",
-                     control_loop_state_text(state),
-                     baseline_diag_result_text(result));
+  if ((baseline_diag_quiet == 0U) || (result != BASELINE_DIAG_RESULT_PASS))
+  {
+    baseline_diag_logf("[CTRL] state=%s %s",
+                       control_loop_state_text(state),
+                       baseline_diag_result_text(result));
+  }
   return result;
 }
 
@@ -309,7 +331,10 @@ static baseline_diag_result_t baseline_diag_run_static_pipeline(void)
   mt6701_snapshot_t enc_snapshot;
 
   total = BASELINE_DIAG_RESULT_PASS;
-  baseline_diag_logf("[DIAG] begin static pipeline");
+  if (baseline_diag_quiet == 0U)
+  {
+    baseline_diag_logf("[DIAG] begin static pipeline");
+  }
   total = baseline_diag_worse(total, baseline_diag_check_boot());
   total = baseline_diag_worse(total, baseline_diag_check_drv());
   total = baseline_diag_worse(total, baseline_diag_check_pwm());
@@ -321,8 +346,11 @@ static baseline_diag_result_t baseline_diag_run_static_pipeline(void)
   }
   else
   {
-    baseline_diag_logf("[ADC] skipped in MCU_ONLY");
-    baseline_diag_logf("[ENC] skipped in MCU_ONLY");
+    if (baseline_diag_quiet == 0U)
+    {
+      baseline_diag_logf("[ADC] skipped in MCU_ONLY");
+      baseline_diag_logf("[ENC] skipped in MCU_ONLY");
+    }
   }
 
   total = baseline_diag_worse(total, baseline_diag_check_control());
@@ -382,6 +410,14 @@ baseline_diag_mode_t baseline_diag_get_mode(void)
 baseline_diag_result_t baseline_diag_get_last_result(void)
 {
   return baseline_diag_last_result;
+}
+
+/* `i` 命令入口：临时关闭静默，全量重跑静态流水线（明细逐行输出）后恢复。 */
+void baseline_diag_run_verbose_pipeline(void)
+{
+  baseline_diag_quiet = 0U;
+  baseline_diag_last_result = baseline_diag_run_static_pipeline();
+  baseline_diag_quiet = 1U;
 }
 
 /*

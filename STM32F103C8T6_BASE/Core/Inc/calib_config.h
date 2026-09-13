@@ -219,6 +219,11 @@ extern "C" {
 #define CALIB_RLEARN_CROSS_DEV_MAX     (0.25f)
 #define CALIB_RLEARN_GUARD_RATIO       (2.0f)
 
+/* VJ 判决工具已完成 L4 结案使命（调试日志经验8），2026-09-13 ROM 瘦身整体退役；
+ * 重新启用改 1（control_loop 请求入口/状态机与 app 的 v 命令、banner 同步恢复）。 */
+#define CALIB_VJ_DIAG_ENABLE           (0U)
+
+#if CALIB_VJ_DIAG_ENABLE
 /* ============ VJ 电压注入判决模式（L4 诊断工具，2026-09-13） ============
  * 独立于 S0-S8 标定序列：静止/旋转下按命令注入单轴开环电压，读 (id,iq)
  * 响应构成 2x2 矩阵 M，判决电流测量系与电压输出系的帧一致性（S7 失控 L4
@@ -232,6 +237,7 @@ extern "C" {
  * 背景 2026-09-13 上板：使能瞬间栅驱 boost 瞬态干扰一次 I2C 读数（cache 单次
  * 失败即 valid=0），零去抖门禁在上电第 1ms 误判 FAULT。 */
 #define CALIB_VJ_ENC_INVALID_FAULT_MS  (60U)
+#endif /* CALIB_VJ_DIAG_ENABLE */
 
 #ifdef __cplusplus
 }

@@ -50,6 +50,9 @@ void baseline_diag_set_mode(baseline_diag_mode_t mode);
 baseline_diag_mode_t baseline_diag_get_mode(void);
 baseline_diag_result_t baseline_diag_get_last_result(void);
 
+/* 全量重跑静态流水线并逐行输出明细（`i` 命令用；上电默认静默只打汇总行）。 */
+void baseline_diag_run_verbose_pipeline(void);
+
 #ifdef __cplusplus
 }
 #endif

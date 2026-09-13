@@ -199,8 +199,6 @@ static calib_s4_tracker_t control_loop_s4;
 /* S1b：COLLECT 段 Iq 拍均值累加（EVALUATE 用均值判 Iq≈0，不吃单拍）。 */
 static float control_loop_s1b_iq_sum;
 static uint16_t control_loop_s1b_iq_n;
-/* S4 诊断心跳节流时间戳。 */
-static uint32_t control_loop_s4_hb_ms;
 /* S4 建立期状态（对齐 S1b 启动时序）：ISR 先在 FROM(=0) 跑稳一段固定时长，
  * 再阶跃到 TO，并把观测时钟从阶跃时刻起算，排除 0->TO 上升瞬态误判。 */
 static uint8_t control_loop_s4_step_pending;   /* 1=等待 FROM 建立后才阶跃到 TO */
@@ -281,6 +279,7 @@ static uint32_t control_loop_s5_tick;
 static uint8_t control_loop_s5_idx;
 static float control_loop_s5_offsets[CALIB_S5_REPEAT_COUNT];
 
+#if CALIB_VJ_DIAG_ENABLE
 /* ---- VJ 电压注入判决模式（L4 诊断，2026-09-13；不在 S0-S8 序列内，不产候选不落盘） ---- */
 typedef enum
 {
@@ -300,6 +299,7 @@ static uint16_t control_loop_vj_n;
 static uint32_t control_loop_vj_tlm_ms;  /* 扫描遥测节流时间戳 */
 static float control_loop_vj_theta;      /* 最近一拍电角度（打印用） */
 static uint32_t control_loop_vj_enc_bad_ms; /* 编码器连续无效毫秒数（去抖，防使能瞬态误判） */
+#endif /* CALIB_VJ_DIAG_ENABLE */
 
 static void control_loop_log(const char *text)
 {
@@ -402,6 +402,7 @@ static void control_loop_reset_measurements(void)
   {
     control_loop_s5_offsets[i] = 0.0f;
   }
+#if CALIB_VJ_DIAG_ENABLE
   control_loop_vj_sub = VJ_SUB_IDLE;
   control_loop_vj_tick = 0U;
   control_loop_vj_vd = 0.0f;
@@ -415,6 +416,7 @@ static void control_loop_reset_measurements(void)
   control_loop_vj_tlm_ms = 0U;
   control_loop_vj_theta = 0.0f;
   control_loop_vj_enc_bad_ms = 0U;
+#endif /* CALIB_VJ_DIAG_ENABLE */
 }
 
 /* 用统一参数 begin 一个 step：target 为收敛目标，band 为在带阈值，
@@ -1060,7 +1062,6 @@ control_loop_command_status_t control_loop_request_power_confirm(void)
       if (control_loop_start_power(CALIB_S4_STEP_FROM_A, 0.0f) == 0U) return CONTROL_LOOP_COMMAND_REJECTED_CURRENT_NOT_READY;
       control_loop_s4_step_pending = 1U;
       control_loop_s4_establish_ms = HAL_GetTick();
-      control_loop_s4_hb_ms = 0U;
       control_loop_state = CONTROL_LOOP_STATE_TEST_CURRENT_VALIDATE;
       break;
     case TEST_STEP_PHASE_SEQ:
@@ -1271,6 +1272,7 @@ control_loop_command_status_t control_loop_request_clear_storage(void)
   return CONTROL_LOOP_COMMAND_ACCEPTED;
 }
 
+#if CALIB_VJ_DIAG_ENABLE
 /* ============ VJ 电压注入判决模式（L4 诊断）：请求入口 ============ */
 
 control_loop_command_status_t control_loop_request_vj_start(void)
@@ -1420,6 +1422,7 @@ control_loop_command_status_t control_loop_request_vj_exit(void)
   control_loop_log("[VJ] exit; back to sequence");
   return CONTROL_LOOP_COMMAND_ACCEPTED;
 }
+#endif /* CALIB_VJ_DIAG_ENABLE */
 
 void control_loop_load_committed_parameters(const motor_parameter_package_t *package)
 {
@@ -1617,7 +1620,6 @@ void control_loop_poll(void)
           case S1A_P3_INJECT:
           {
             /* 角度 k：持续注入固定 Vd；前 SETTLE 跳过建立，之后 COLLECT 采均值。 */
-            char p3l[128];
             foc_runtime_set_voltage_target(CALIB_S1A_P3_VOLTAGE_V, 0.0f);
             if ((s1_elapsed >= CALIB_S1A_P3_SETTLE_MS) && (s1_good != 0U))
             {
@@ -1638,11 +1640,6 @@ void control_loop_poll(void)
               mv = control_loop_s1_lvl_v / (float)control_loop_s1_lvl_n;
               control_loop_p3_du[control_loop_p3_k] = mu - control_loop_s1_base_u;
               control_loop_p3_dv[control_loop_p3_k] = mv - control_loop_s1_base_v;
-              (void)snprintf(p3l, sizeof(p3l), "[P3] ang=%u dU=%+.1f dV=%+.1f",
-                             (unsigned)control_loop_p3_k,
-                             (double)control_loop_p3_du[control_loop_p3_k],
-                             (double)control_loop_p3_dv[control_loop_p3_k]);
-              control_loop_log(p3l);
               foc_runtime_set_voltage_target(0.0f, 0.0f);
               control_loop_s1_sub = S1A_P3_DECAY;
               control_loop_s1_phase_tick = now_ms;
@@ -2035,21 +2032,6 @@ void control_loop_poll(void)
           control_loop_s1b_iq_sum += judge_iq;
           control_loop_s1b_iq_n++;
         }
-        if ((uint32_t)(now_ms - control_loop_sign_hb_ms) >= 100U)
-        {
-          char dbg_line[176];
-          control_loop_sign_hb_ms = now_ms;
-          (void)snprintf(dbg_line, sizeof(dbg_line),
-                         "[DBG] S1b ph=%d id=%.4f iq=%.4f wm=%.4f sp=%.4f run=%u n=%u vd=%.4f mode=%d",
-                         (int)phase, (double)judge_id, (double)judge_iq,
-                         (double)control_loop_step.window_mean,
-                         (double)control_loop_step.spread,
-                         (unsigned)control_loop_step.in_band_run,
-                         (unsigned)tick_samples,
-                         (double)output->voltage_command_v.d,
-                         (int)foc_runtime_get_control_mode());
-          control_loop_log(dbg_line);
-        }
         if (phase == CALIB_STEP_EVALUATE)
         {
           /* Iq 判据用 COLLECT 段拍均值（n 理论上=collect_n，为 0 时回退当前拍均值）。 */
@@ -2275,12 +2257,6 @@ void control_loop_poll(void)
          * 才阶跃到 TO、初始化跟踪器，观测时钟自此计（elapsed 改用 s4_start_ms）。 */
         if ((uint32_t)(now_ms - control_loop_s4_establish_ms) < CALIB_S4_ESTABLISH_MS)
         {
-          /* 建立期心跳：确认主循环/ISR 仍在跑，避免建立期“静默卡死”表象。 */
-          if ((uint32_t)(now_ms - control_loop_s4_hb_ms) >= 100U)
-          {
-            control_loop_s4_hb_ms = now_ms;
-            control_loop_log("[DBG] S4 establish idle at FROM; awaiting step");
-          }
           break;
         }
         foc_runtime_set_current_target(CALIB_S4_STEP_TO_A, 0.0f);
@@ -2289,15 +2265,7 @@ void control_loop_poll(void)
                                 CALIB_SETTLE_HOLD_CYCLES, CALIB_S4_SETTLE_WINDOW_CYCLES,
                                 CALIB_S4_SETTLING_TIME_MAX_TC,
                                 CALIB_S4_OBSERVE_TC);
-        {
-          char s4_step_line[96];
-          (void)snprintf(s4_step_line, sizeof(s4_step_line),
-                         "[DBG] S4 step issued -> TO %.2fA; observe clock started",
-                         (double)CALIB_S4_STEP_TO_A);
-          control_loop_log(s4_step_line);
-        }
         control_loop_s4_start_ms = now_ms;
-        control_loop_s4_hb_ms = 0U;
         control_loop_s4_step_pending = 0U;
       }
       {
@@ -2364,7 +2332,6 @@ void control_loop_poll(void)
         {
           case PSEQ_PREP:
           {
-            char pl[96];
             control_loop_safe_disable();
             control_loop_parameters.phase_map.phase_a_output = control_loop_phase_perms[control_loop_pseq_idx][0];
             control_loop_parameters.phase_map.phase_b_output = control_loop_phase_perms[control_loop_pseq_idx][1];
@@ -2373,12 +2340,6 @@ void control_loop_poll(void)
             {
               break; /* start_openloop_power 内部已 enter_fault */
             }
-            (void)snprintf(pl, sizeof(pl), "[PSEQ] perm%u a->%u b->%u c->%u",
-                           (unsigned)control_loop_pseq_idx,
-                           (unsigned)control_loop_phase_perms[control_loop_pseq_idx][0],
-                           (unsigned)control_loop_phase_perms[control_loop_pseq_idx][1],
-                           (unsigned)control_loop_phase_perms[control_loop_pseq_idx][2]);
-            control_loop_log(pl);
             control_loop_pseq_id_sum = 0.0f;
             control_loop_pseq_iq_sum = 0.0f;
             control_loop_pseq_n = 0U;
@@ -2616,8 +2577,8 @@ void control_loop_poll(void)
             foc_angle_wrap_signed_rad(mech_now - control_loop_dir_mech_prev);
         control_loop_dir_mech_prev = mech_now;
 
-        /* 手转等待进度心跳：每 1.5s 报累计角位移与剩余超时，避免 15s 静默让人误按 p。 */
-        if ((uint32_t)(now_ms - control_loop_dir_hb_ms) >= 1500U)
+        /* 手转等待进度心跳：每 3s 报累计角位移与剩余超时，避免 15s 静默让人误按 p。 */
+        if ((uint32_t)(now_ms - control_loop_dir_hb_ms) >= 3000U)
         {
           char dhb_line[112];
           uint32_t left_s = (dir_elapsed < CALIB_S6_MANUAL_TIMEOUT_MS)
@@ -2806,8 +2767,9 @@ void control_loop_poll(void)
           break;
         }
       }
-      /* S7 周期遥测与判据 v2 窗统计：瞬时值 + 50ms 窗均值并列；
-       * 建立段后累计，窗尾结算 EMF-free 比值 wvd/wid 并喂全程累计。 */
+      /* S7 判据 v2 窗统计：建立段后逐拍累计，每 CALIB_S7_DBG_PERIOD_MS 窗尾结算
+       * 窗均值与 EMF-free 比值 wvd/wid 并喂全程累计（逐窗诊断打印已退役，
+       * 2026-09-13 ROM 瘦身；结论走 [RESULT]/[RLEARN] 行）。 */
       if ((have_tick_mean != 0U) && (elapsed > (uint32_t)CALIB_S7_SETTLE_SKIP_MS))
       {
         control_loop_s7_wid_sum += judge_id;
@@ -2816,25 +2778,14 @@ void control_loop_poll(void)
       }
       if ((uint32_t)(elapsed - control_loop_s7_dbg_ms) >= CALIB_S7_DBG_PERIOD_MS)
       {
-        char dbg_line[176];
         float win_id, win_iq, win_vd;
         control_loop_s7_dbg_ms = elapsed;
-        win_id = (control_loop_s7_wn > 0U)
+        win_id = (control_loop_s7_wid_sum > 0U)
             ? control_loop_s7_wid_sum / (float)control_loop_s7_wn : 0.0f;
-        win_iq = (control_loop_s7_wn > 0U)
+        win_iq = (control_loop_s7_wiq_sum > 0U)
             ? control_loop_s7_wiq_sum / (float)control_loop_s7_wn : 0.0f;
         win_vd = (control_loop_s7_vn > 0U)
             ? control_loop_s7_wvd_sum / (float)control_loop_s7_vn : 0.0f;
-        (void)snprintf(dbg_line, sizeof(dbg_line),
-                       "[S7DBG] t=%lums id=%.4f iq=%.4f vd=%.3f vq=%.3f wid=%.4f wiq=%.4f wn=%u",
-                       (unsigned long)elapsed,
-                       (double)output->measured_current_a.d,
-                       (double)output->measured_current_a.q,
-                       (double)output->voltage_command_v.d,
-                       (double)output->voltage_command_v.q,
-                       (double)win_id, (double)win_iq,
-                       (unsigned)control_loop_s7_wn);
-        control_loop_log(dbg_line);
         /* 全程窗均值累计（每窗等权），供调节品质门。 */
         if (control_loop_s7_wn > 0U)
         {
@@ -2865,6 +2816,7 @@ void control_loop_poll(void)
       }
       break;
 
+#if CALIB_VJ_DIAG_ENABLE
     case CONTROL_LOOP_STATE_VJ_DIAG:
     {
       const encoder_cache_sample_t *vj_enc = encoder_cache_get_latest();
@@ -3008,6 +2960,7 @@ void control_loop_poll(void)
       }
       break;
     }
+#endif /* CALIB_VJ_DIAG_ENABLE */
 
     case CONTROL_LOOP_STATE_POWER_ARMED:
     case CONTROL_LOOP_STATE_TEST_ALIGN: /* 旧独立对齐步已被 S1 取代，保留枚举不可达 */
