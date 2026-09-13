@@ -11,7 +11,11 @@
 
 #include "app_baseline.h"
 #include "board_config.h"
+#if APP_MODE_RUN
+#include "app_run.h"
+#else
 #include "control_loop.h"
+#endif
 #include "debug_log.h"
 #include "motor_adc.h"
 #include "motor_drv.h"
@@ -298,7 +302,28 @@ static baseline_diag_result_t baseline_diag_check_mt6701(mt6701_snapshot_t *snap
   return BASELINE_DIAG_RESULT_PASS;
 }
 
-/* 控制层检查：当前基线只允许 safe idle。 */
+/* 控制层检查：测试态查 control_loop 安全态；运行态查 app_run 状态
+ * （FAULT=FAIL、NEED_CAL=WARN，静默规则同其它检查）。 */
+#if APP_MODE_RUN
+static baseline_diag_result_t baseline_diag_check_control(void)
+{
+  app_run_state_t state;
+  baseline_diag_result_t result;
+
+  state = app_run_get_state();
+  result = (state == APP_RUN_STATE_FAULT) ? BASELINE_DIAG_RESULT_FAIL :
+           (state == APP_RUN_STATE_NEED_CAL) ? BASELINE_DIAG_RESULT_WARN :
+           BASELINE_DIAG_RESULT_PASS;
+
+  if ((baseline_diag_quiet == 0U) || (result != BASELINE_DIAG_RESULT_PASS))
+  {
+    baseline_diag_logf("[CTRL] state=RUN_%s %s",
+                       app_run_state_text(state),
+                       baseline_diag_result_text(result));
+  }
+  return result;
+}
+#else
 static baseline_diag_result_t baseline_diag_check_control(void)
 {
   baseline_diag_result_t result;
@@ -319,6 +344,7 @@ static baseline_diag_result_t baseline_diag_check_control(void)
   }
   return result;
 }
+#endif
 
 /*
  * 上电后运行一次完整静态流水线。
@@ -432,7 +458,11 @@ void baseline_diag_init(void)
   (void)motor_adc_init_static();
   (void)motor_adc_calibrate_zero_current();
   baseline_diag_log_zero_samples();
+#if APP_MODE_RUN
+  /* 运行态由 app_run 自持状态机，控制层初始化/轮询不经此处。 */
+#else
   control_loop_init();
+#endif
 #if BASELINE_DIAG_PERIODIC_LOG_ENABLE
   baseline_diag_initialized = 1U;
 #endif
@@ -452,7 +482,11 @@ void baseline_diag_poll(void)
   uint32_t now;
 #endif
 
+#if APP_MODE_RUN
+  /* 运行态主循环在 app_run_poll，此处不驱动控制层。 */
+#else
   control_loop_poll();
+#endif
 
 #if BASELINE_DIAG_PERIODIC_LOG_ENABLE
   if (baseline_diag_initialized == 0U)

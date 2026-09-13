@@ -48,7 +48,11 @@ void app_baseline_init(void)
   /* 构建身份自证：日志与代码树可对齐（排除 written!=verified，L4 嫌疑①）。 */
   debug_log_write_line("build: " __DATE__ " " __TIME__);
   debug_log_write_line("safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot");
+#if CALIB_VJ_DIAG_ENABLE
+  debug_log_write_line("cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) v=VJ-diag i/?=diag");
+#else
   debug_log_write_line("cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) i/?=diag");
+#endif
 
   safety_manager_init();
   encoder_cache_init();

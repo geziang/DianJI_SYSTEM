@@ -219,9 +219,12 @@ extern "C" {
 #define CALIB_RLEARN_CROSS_DEV_MAX     (0.25f)
 #define CALIB_RLEARN_GUARD_RATIO       (2.0f)
 
-/* VJ 判决工具已完成 L4 结案使命（调试日志经验8），2026-09-13 ROM 瘦身整体退役；
- * 重新启用改 1（control_loop 请求入口/状态机与 app 的 v 命令、banner 同步恢复）。 */
+/* VJ 判决工具（L4 结案，调试日志经验8）。2026-09-13 ROM 瘦身后从常驻改为
+ * 按目标启用：测试 target 在工程预定义 CALIB_VJ_DIAG_ENABLE=1（诊断工具住
+ * 诊断固件），运行 target 走默认 0。 */
+#ifndef CALIB_VJ_DIAG_ENABLE
 #define CALIB_VJ_DIAG_ENABLE           (0U)
+#endif
 
 #if CALIB_VJ_DIAG_ENABLE
 /* ============ VJ 电压注入判决模式（L4 诊断工具，2026-09-13） ============

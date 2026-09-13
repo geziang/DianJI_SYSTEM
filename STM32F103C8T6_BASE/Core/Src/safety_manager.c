@@ -1,6 +1,9 @@
 #include "safety_manager.h"
 
 #include "control_loop.h"
+#if APP_MODE_RUN
+#include "app_run.h"
+#endif
 #include "motor_adc.h"
 #include "motor_drv.h"
 #include "motor_parameter_store.h"
@@ -52,8 +55,13 @@ void safety_manager_poll(void)
       {
         /* FR-2.4：加载成功的已固化包注入控制参数集（符号/转子/静态 R、L
          * + v2 学习值重建），日志打印来源页/revision。
-         * phase_map 不注入（P3 恒等契约 2026-09-13），只存 control_loop_loaded 镜像。 */
+         * phase_map 不注入（P3 恒等契约 2026-09-13），只存 control_loop_loaded 镜像。
+         * 运行态固件改灌 app_run（map 从包直取，DD-01 契约）。 */
+#if APP_MODE_RUN
+        app_run_load_package(&parameters);
+#else
         control_loop_load_committed_parameters(&parameters);
+#endif
         safety_manager_state = SAFETY_MANAGER_STATE_ADC_ZERO_REFRESH;
       }
       break;

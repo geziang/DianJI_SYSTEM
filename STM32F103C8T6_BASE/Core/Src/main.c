@@ -21,7 +21,13 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+/* 双 Target 分流：F103-run 固件走 app_run（读固化包直入运行态），
+ * 测试 target（默认，不定义 APP_MODE_RUN）走 app_baseline 标定流，行为不变。 */
+#if APP_MODE_RUN
+#include "app_run.h"
+#else
 #include "app_baseline.h"
+#endif
 
 /* USER CODE END Includes */
 
@@ -109,7 +115,11 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+#if APP_MODE_RUN
+  app_run_init();
+#else
   app_baseline_init();
+#endif
 
   /* USER CODE END 2 */
 
@@ -120,7 +130,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+#if APP_MODE_RUN
+    app_run_poll();
+#else
     app_baseline_poll();
+#endif
   }
   /* USER CODE END 3 */
 }
