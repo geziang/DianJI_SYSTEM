@@ -14,8 +14,9 @@
 extern "C" {
 #endif
 
-/* 基线版本号会通过 USART1 日志打印，便于和测试记录对齐。 */
-#define APP_BASELINE_VERSION  "F103-identification-test-0.4"
+/* 基线版本号会通过 USART1 日志打印，便于和测试记录对齐。
+ * 0.5-l4diag：新增 VJ 电压注入判决模式（L4 定位实验）+ 构建时间戳自证。 */
+#define APP_BASELINE_VERSION  "F103-identification-test-0.5-l4diag"
 
 /* CubeMX 外设初始化完成后调用：进入安全态并启动静态诊断。 */
 void app_baseline_init(void);

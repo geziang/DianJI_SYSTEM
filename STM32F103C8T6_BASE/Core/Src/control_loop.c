@@ -75,14 +75,22 @@ static uint8_t control_loop_test_precheck_passed;
 static float control_loop_static_r_ohm;
 static float control_loop_static_l_h;
 
-/* ============ SPEC-RUN R1/R2：S7 块统计 + R 自学习 + 参数注入 ============ */
+/* ============ SPEC-RUN R1/R2：S7 判据 v2 窗统计 + R 自学习 + 参数注入 ============ */
 
-/* S7 动态 R 块统计（FR-1.2）：建立段剔除 + 分块 ratio-of-means + 块级截尾。 */
-static calib_s7_dyn_r_cfg_t control_loop_s7_cfg;
-static calib_s7_dyn_r_accum_t control_loop_s7_accum;
-/* 编译期护栏：calib_config 的块数不得超出统计库容量。 */
-typedef char control_loop_s7_blocks_check[
-    (CALIB_S7_STAT_BLOCKS <= CALIB_STATS_S7_MAX_BLOCKS) ? 1 : -1];
+/* S7 判据 v2 窗统计（2026-09-13 L4 结案小包）：50ms 窗内 id/iq 吃 tick 均值、
+ * vd/vq 吃每拍输出，建立段后累计；窗尾结算 EMF-free 比值 wvd/wid（vd=R*id-ωL*iq，
+ * EMF 只在 q 轴），判决取全部窗比值的中位数（抗离群，FR-1.2 精神）；
+ * 全程窗均值另喂调节品质门。旧分块统计（calib_s7_dyn_r_*）已退役，
+ * 函数保留在 calib_stats 供 PC 单测与历史追溯。 */
+static float control_loop_s7_wvd_sum, control_loop_s7_wvq_sum; /* 50ms 窗电压和 */
+static uint16_t control_loop_s7_vn;                             /* 窗内电压累计拍数 */
+static float control_loop_s7_wratio[CALIB_S7_WINDOW_COUNT];     /* 每窗 wvd/wid */
+static uint16_t control_loop_s7_wratio_n;                       /* 已结算窗比值数 */
+static float control_loop_s7_cap_wid_sum, control_loop_s7_cap_wiq_sum; /* 全程窗均值累计 */
+static uint16_t control_loop_s7_cap_wn;                         /* 已累计窗数 */
+/* 编译期护栏：窗数不得超出统计库中位数容量。 */
+typedef char control_loop_s7_window_check[
+    (CALIB_S7_WINDOW_COUNT <= CALIB_STATS_MAX_SAMPLES) ? 1 : -1];
 
 /* S7 行程/力矩方向门禁（FR-1.3.2）。 */
 static float control_loop_s7_mech_prev;
@@ -90,6 +98,11 @@ static float control_loop_s7_mech_delta;
 /* 失步早期检测：双条件同时满足的持续计数 + 遥测时间戳。 */
 static uint32_t control_loop_s7_los_ms;
 static uint32_t control_loop_s7_dbg_ms;
+/* L4 判别探针（2026-09-13）：S7 遥测并列 50ms 窗均值——tick 均值按打印周期累计，
+ * 与瞬时值对照判别"电角频率×打印周期混叠"：窗均值≈目标(0.10/0.18)而瞬时值偏航
+ * = 混叠实锤（修统计+角度外推）；窗均值≈打印值 = 旋转下测量真误差（扫采样相位）。 */
+static float control_loop_s7_wid_sum, control_loop_s7_wiq_sum;
+static uint16_t control_loop_s7_wn;
 /* S5 偏置本次是否可信（S7 入口门禁用：S5 ok=0 时角度链未证实，禁止加功率）。 */
 static uint8_t control_loop_s5_ok;
 
@@ -268,6 +281,26 @@ static uint32_t control_loop_s5_tick;
 static uint8_t control_loop_s5_idx;
 static float control_loop_s5_offsets[CALIB_S5_REPEAT_COUNT];
 
+/* ---- VJ 电压注入判决模式（L4 诊断，2026-09-13；不在 S0-S8 序列内，不产候选不落盘） ---- */
+typedef enum
+{
+  VJ_SUB_IDLE = 0,   /* 已进入 VJ、未上功率，等 p */
+  VJ_SUB_HOLD,       /* 上电保持零压，等注入命令 */
+  VJ_SUB_PULSE,      /* 静止单轴脉冲进行中（末段均值打印 [VJ] 行） */
+  VJ_SUB_SWEEP       /* vq 旋转扫描进行中（[VJT] 遥测） */
+} vj_subphase_t;
+
+static vj_subphase_t control_loop_vj_sub;
+static uint32_t control_loop_vj_tick;
+static float control_loop_vj_vd, control_loop_vj_vq;
+static uint8_t control_loop_vj_axis_q;   /* 本脉冲作用轴：0=vd 1=vq */
+static float control_loop_vj_id_sum, control_loop_vj_iq_sum;
+static float control_loop_vj_du_sum, control_loop_vj_dv_sum; /* raw 相对零偏偏移累计 */
+static uint16_t control_loop_vj_n;
+static uint32_t control_loop_vj_tlm_ms;  /* 扫描遥测节流时间戳 */
+static float control_loop_vj_theta;      /* 最近一拍电角度（打印用） */
+static uint32_t control_loop_vj_enc_bad_ms; /* 编码器连续无效毫秒数（去抖，防使能瞬态误判） */
+
 static void control_loop_log(const char *text)
 {
   debug_log_write_line(text);
@@ -369,6 +402,19 @@ static void control_loop_reset_measurements(void)
   {
     control_loop_s5_offsets[i] = 0.0f;
   }
+  control_loop_vj_sub = VJ_SUB_IDLE;
+  control_loop_vj_tick = 0U;
+  control_loop_vj_vd = 0.0f;
+  control_loop_vj_vq = 0.0f;
+  control_loop_vj_axis_q = 0U;
+  control_loop_vj_id_sum = 0.0f;
+  control_loop_vj_iq_sum = 0.0f;
+  control_loop_vj_du_sum = 0.0f;
+  control_loop_vj_dv_sum = 0.0f;
+  control_loop_vj_n = 0U;
+  control_loop_vj_tlm_ms = 0U;
+  control_loop_vj_theta = 0.0f;
+  control_loop_vj_enc_bad_ms = 0U;
 }
 
 /* 用统一参数 begin 一个 step：target 为收敛目标，band 为在带阈值，
@@ -425,8 +471,11 @@ static uint8_t control_loop_prepare_test_parameters(void)
   control_loop_parameters.current.channel_u_sign = 1.0f;
   control_loop_parameters.current.channel_v_sign = 1.0f;
 
-  /* SPEC-RUN FR-2.4/1.5.5：上电注入的已固化参数作为测试起点——角度链/换相/
-   * 实测符号/静态 R、L；ADC 零偏仍取本拍实测（上面已设）。 */
+  /* SPEC-RUN FR-2.4/1.5.5：上电注入的已固化参数作为测试起点——角度链/
+   * 实测符号/静态 R、L；ADC 零偏仍取本拍实测（上面已设）。
+   * phase_map 刻意不恢复：P3 判据按恒等映射写死（绑定锚点），注入上靴
+   * 换相会让 S1a 出通道交叉假故障（2026-09-13 教训）；PHASE_SEQ 每靴
+   * 自会重探并覆写 RAM，运行态 map 走 boot 注入不经此处。 */
   if (control_loop_loaded_valid != 0U)
   {
     control_loop_parameters.rotor.pole_pairs = control_loop_loaded.pole_pairs;
@@ -437,9 +486,6 @@ static uint8_t control_loop_prepare_test_parameters(void)
         (float)control_loop_loaded.current_sign_u;
     control_loop_parameters.current.channel_v_sign =
         (float)control_loop_loaded.current_sign_v;
-    control_loop_parameters.phase_map.phase_a_output = control_loop_loaded.phase_map_a;
-    control_loop_parameters.phase_map.phase_b_output = control_loop_loaded.phase_map_b;
-    control_loop_parameters.phase_map.phase_c_output = control_loop_loaded.phase_map_c;
     control_loop_static_r_ohm = control_loop_loaded.phase_resistance_ohm;
     control_loop_static_l_h = control_loop_loaded.phase_inductance_h;
     control_loop_phase_seq_verified = control_loop_loaded.phase_seq_verified;
@@ -660,6 +706,7 @@ static void control_loop_judge_s7_and_create_candidate(void)
   float effective_r;
   float window_lo;
   float window_hi;
+  float ratio_iqr;
   motor_parameter_store_status_t status;
 
   /* ---- 门 1：行程/力矩方向（FR-1.3.2）。iq>0 驱动下机械位移应与
@@ -685,25 +732,58 @@ static void control_loop_judge_s7_and_create_candidate(void)
     return;
   }
 
-  /* ---- 门 2：动态 R 终值（FR-1.2）。零样本与超窗是两种失败，分开报。 ---- */
-  if (calib_s7_dyn_r_finalize(&control_loop_s7_accum, &dynamic_r) == 0U)
+  /* ---- 门 2：调节品质（判据 v2，2026-09-13）。建立段后全程窗均值应贴目标——
+   * 这是 L4 结案的直接判据：旋转下电流环确实把电流调住了（窗均值滤掉
+   * 5ms 台阶激起的 200Hz 振荡混叠），否则不产候选。 ---- */
+  {
+    float cap_id = (control_loop_s7_cap_wn > 0U)
+        ? control_loop_s7_cap_wid_sum / (float)control_loop_s7_cap_wn : 0.0f;
+    float cap_iq = (control_loop_s7_cap_wn > 0U)
+        ? control_loop_s7_cap_wiq_sum / (float)control_loop_s7_cap_wn : 0.0f;
+    char line[176];
+    if ((control_loop_s7_cap_wn < CALIB_S7_WRATIO_MIN_WINDOWS) ||
+        (cap_id > (CALIB_S7_ID_TARGET_A + CALIB_S7_REG_ID_BAND_A)) ||
+        (cap_id < (CALIB_S7_ID_TARGET_A - CALIB_S7_REG_ID_BAND_A)) ||
+        (cap_iq < (CALIB_S7_IQ_DRIVE_A * CALIB_S7_REG_IQ_MIN_RATIO)))
+    {
+      (void)snprintf(line, sizeof(line),
+                     "[S7] regulation gate failed: mean wid=%.4f (target %.2f +-%.2f) "
+                     "wiq=%.4f (min %.3f) windows=%u",
+                     (double)cap_id, (double)CALIB_S7_ID_TARGET_A,
+                     (double)CALIB_S7_REG_ID_BAND_A, (double)cap_iq,
+                     (double)(CALIB_S7_IQ_DRIVE_A * CALIB_S7_REG_IQ_MIN_RATIO),
+                     (unsigned)control_loop_s7_cap_wn);
+      control_loop_log(line);
+      control_loop_log("[S7] no candidate from this run; r=restart x=stop");
+      control_loop_candidate_ready = 0U;
+      control_loop_state = CONTROL_LOOP_STATE_CANDIDATE_REVIEW;
+      return;
+    }
+    (void)snprintf(line, sizeof(line),
+                   "[RESULT] S7 regulation ok: mean wid=%.4f wiq=%.4f windows=%u",
+                   (double)cap_id, (double)cap_iq, (unsigned)control_loop_s7_cap_wn);
+    control_loop_log(line);
+  }
+
+  /* ---- 门 3：动态 R（判据 v2，EMF-free）。vd = R*id - ωL*iq，交叉项 ~0.01V
+   * 可忽略、EMF 只落 q 轴，故每窗 wvd/wid 即阻性比；取全部窗比值的
+   * 中位数（抗离群，FR-1.2 精神）对标本次 S2 实测 R 的 [0.5,1.5] 窗。 ---- */
+  if (control_loop_s7_wratio_n < CALIB_S7_WRATIO_MIN_WINDOWS)
   {
     char line[160];
     (void)snprintf(line, sizeof(line),
-                   "[CANDIDATE] insufficient low-speed samples: blocks=0 samples=%lu "
-                   "min_iq=%.3fA; keeping static parameters",
-                   (unsigned long)control_loop_s7_accum.sample_count,
-                   (double)control_loop_s7_cfg.min_iq_a);
+                   "[CANDIDATE] insufficient ratio windows: n=%u (min %u); keeping static parameters",
+                   (unsigned)control_loop_s7_wratio_n,
+                   (unsigned)CALIB_S7_WRATIO_MIN_WINDOWS);
     control_loop_log(line);
     control_loop_log("[S7] no candidate from this run; r=restart x=stop");
     control_loop_candidate_ready = 0U;
     control_loop_state = CONTROL_LOOP_STATE_CANDIDATE_REVIEW;
     return;
   }
+  calib_median_iqr(control_loop_s7_wratio, control_loop_s7_wratio_n,
+                   &dynamic_r, &ratio_iqr);
   control_loop_s7_valid = 1U;
-
-  /* ---- 门 3：候选窗（基准 = 本次 S2 实测 R，FR-1.5 双源交叉；
-   * S2 未测得时 static_r 退回标称，行为同旧版）。 ---- */
   window_lo = control_loop_static_r_ohm * CALIB_S7_DYN_R_LOW_RATIO;
   window_hi = control_loop_static_r_ohm * CALIB_S7_DYN_R_HIGH_RATIO;
   if ((dynamic_r < window_lo) || (dynamic_r > window_hi))
@@ -711,10 +791,9 @@ static void control_loop_judge_s7_and_create_candidate(void)
     char line[176];
     (void)snprintf(line, sizeof(line),
                    "[CANDIDATE] dynamic R outside window; discarded: dyn_R=%.4fohm "
-                   "blocks=%u samples=%lu window=[%.4f,%.4f] base_R=%.4fohm",
+                   "windows=%u iqr=%.4f window=[%.4f,%.4f] base_R=%.4fohm",
                    (double)dynamic_r,
-                   (unsigned)control_loop_s7_accum.block_count,
-                   (unsigned long)control_loop_s7_accum.sample_count,
+                   (unsigned)control_loop_s7_wratio_n, (double)ratio_iqr,
                    (double)window_lo, (double)window_hi,
                    (double)control_loop_static_r_ohm);
     control_loop_log(line);
@@ -798,10 +877,9 @@ static void control_loop_judge_s7_and_create_candidate(void)
   {
     char line[160];
     (void)snprintf(line, sizeof(line),
-                   "[RESULT] dynamic_R_low_speed=%.6fohm blocks=%u samples=%lu window=[%.4f,%.4f]",
+                   "[RESULT] dynamic_R_daxis=%.6fohm windows=%u iqr=%.4f window=[%.4f,%.4f]",
                    (double)dynamic_r,
-                   (unsigned)control_loop_s7_accum.block_count,
-                   (unsigned long)control_loop_s7_accum.sample_count,
+                   (unsigned)control_loop_s7_wratio_n, (double)ratio_iqr,
                    (double)window_lo, (double)window_hi);
     control_loop_log(line);
   }
@@ -834,11 +912,10 @@ void control_loop_init(void)
   /* SPEC-RUN R1/R2 上电一次性的状态（r=restart 不清，保证"独立上电"语义）：
    * S7 块统计配置、R 自学习（上电后由 control_loop_load_committed_parameters
    * 从参数包 v2 重建）、S2/S7 本次结果、相序验证结论、注入包。 */
-  control_loop_s7_cfg.skip_ms = CALIB_S7_SETTLE_SKIP_MS;
-  control_loop_s7_cfg.block_ms = CALIB_S7_STAT_BLOCK_MS;
-  control_loop_s7_cfg.max_blocks = CALIB_S7_STAT_BLOCKS;
-  control_loop_s7_cfg.min_iq_a = CALIB_S7_IQ_DRIVE_A * CALIB_S7_DYN_R_MIN_IQ_RATIO;
-  calib_s7_dyn_r_init(&control_loop_s7_accum, &control_loop_s7_cfg);
+  control_loop_s7_wratio_n = 0U;
+  control_loop_s7_cap_wid_sum = 0.0f;
+  control_loop_s7_cap_wiq_sum = 0.0f;
+  control_loop_s7_cap_wn = 0U;
   control_loop_rlearn_cfg.history_n = CALIB_RLEARN_HISTORY_N;
   control_loop_rlearn_cfg.repeat_dev_max = CALIB_RLEARN_REPEAT_DEV_MAX;
   control_loop_rlearn_cfg.cross_dev_max = CALIB_RLEARN_CROSS_DEV_MAX;
@@ -853,6 +930,16 @@ void control_loop_init(void)
   control_loop_s7_mech_delta = 0.0f;
   control_loop_s7_los_ms = 0U;
   control_loop_s7_dbg_ms = 0U;
+  control_loop_s7_wid_sum = 0.0f;
+  control_loop_s7_wiq_sum = 0.0f;
+  control_loop_s7_wn = 0U;
+  control_loop_s7_wvd_sum = 0.0f;
+  control_loop_s7_wvq_sum = 0.0f;
+  control_loop_s7_vn = 0U;
+  control_loop_s7_wratio_n = 0U;
+  control_loop_s7_cap_wid_sum = 0.0f;
+  control_loop_s7_cap_wiq_sum = 0.0f;
+  control_loop_s7_cap_wn = 0U;
   control_loop_s5_ok = 0U;
   control_loop_phase_seq_verified = 0U;
   control_loop_loaded_valid = 0U;
@@ -1010,15 +1097,26 @@ control_loop_command_status_t control_loop_request_power_confirm(void)
         return CONTROL_LOOP_COMMAND_REJECTED_STATE;
       }
       control_loop_reset_measurements();
-      /* S7 统计复位：建立段跳过 + 块累计清零（FR-1.2）；行程跟踪起点（FR-1.3）。 */
-      calib_s7_dyn_r_init(&control_loop_s7_accum, &control_loop_s7_cfg);
+      /* S7 判据 v2 统计复位：窗累计/窗比值/全程均值清零；行程跟踪起点（FR-1.3）。 */
       control_loop_s7_valid = 0U;
       control_loop_s7_los_ms = 0U;
       control_loop_s7_dbg_ms = 0U;
+      control_loop_s7_wid_sum = 0.0f;
+      control_loop_s7_wiq_sum = 0.0f;
+      control_loop_s7_wn = 0U;
+      control_loop_s7_wvd_sum = 0.0f;
+      control_loop_s7_wvq_sum = 0.0f;
+      control_loop_s7_vn = 0U;
+      control_loop_s7_wratio_n = 0U;
+      control_loop_s7_cap_wid_sum = 0.0f;
+      control_loop_s7_cap_wiq_sum = 0.0f;
+      control_loop_s7_cap_wn = 0U;
       control_loop_s7_mech_prev = foc_mechanical_raw_to_rad(enc7->raw_angle);
       control_loop_s7_mech_delta = 0.0f;
       /* 相序镜像未裁决 = 换相可能反向，加转矩即堵转、PI 顶限压拉垮母线
-       *（有 brown-out 复位前科），硬拦不放行；重跑 PHASE_SEQ 拿到 verified 再来。 */
+       *（2026-09-12 S7 硬发散实测；勘误后主因虽定位于测量侧 phase_map 不对称，
+       * 错误映射下 S7 会发散仍是既证事实），硬拦不放行；重跑 PHASE_SEQ 拿到
+       * verified 再来。规格偏差已在 DD-01 §6.13 登记。 */
       if (control_loop_phase_seq_verified == 0U)
       {
         control_loop_log("[S7] entry rejected: phase-seq mirror not verified; rerun PHASE_SEQ (r=restart)");
@@ -1173,6 +1271,156 @@ control_loop_command_status_t control_loop_request_clear_storage(void)
   return CONTROL_LOOP_COMMAND_ACCEPTED;
 }
 
+/* ============ VJ 电压注入判决模式（L4 诊断）：请求入口 ============ */
+
+control_loop_command_status_t control_loop_request_vj_start(void)
+{
+  motor_adc_current_diagnostic_t diagnostic;
+  uint8_t silent;
+  char line[192];
+
+  /* 与 c=clear 同一静默态白名单：运行中/FAULT 一律拒绝。 */
+  silent = 0U;
+  if ((control_loop_state == CONTROL_LOOP_STATE_SAFE_IDLE) ||
+      (control_loop_state == CONTROL_LOOP_STATE_TEST_BOOT) ||
+      (control_loop_state == CONTROL_LOOP_STATE_TEST_READY) ||
+      (control_loop_state == CONTROL_LOOP_STATE_POWER_ARMED) ||
+      (control_loop_state == CONTROL_LOOP_STATE_CANDIDATE_REVIEW))
+  {
+    silent = 1U;
+  }
+  if (silent == 0U)
+  {
+    return CONTROL_LOOP_COMMAND_REJECTED_STATE;
+  }
+  /* 本靴 S0 预检须已通过（保证参数集/增益至少配置过一次，TEST_BOOT 首拍前拒绝）。 */
+  if (control_loop_test_precheck_passed == 0U)
+  {
+    return CONTROL_LOOP_COMMAND_REJECTED_CURRENT_NOT_READY;
+  }
+  /* 门禁与 S0 同源：零偏质量 + 编码器在线；转子/换相/符号沿用当前 RAM 配置
+   * （判决对象就是"S7 将要用的这套链"），入口打印生效配置供解读。 */
+  motor_adc_get_current_diagnostic(&diagnostic);
+  if ((diagnostic.adc_hardware_calibrated == 0U) ||
+      (diagnostic.zero.quality != MOTOR_ADC_ZERO_QUALITY_OK))
+  {
+    control_loop_log("[VJ] ADC zero check failed");
+    return CONTROL_LOOP_COMMAND_REJECTED_CURRENT_NOT_READY;
+  }
+  if (encoder_cache_is_valid(TEST_ENCODER_BOOT_MAX_AGE_MS) == 0U)
+  {
+    control_loop_log("[VJ] encoder not online");
+    return CONTROL_LOOP_COMMAND_REJECTED_CURRENT_NOT_READY;
+  }
+  control_loop_vj_sub = VJ_SUB_IDLE;
+  control_loop_vj_vd = 0.0f;
+  control_loop_vj_vq = 0.0f;
+  control_loop_vj_theta = 0.0f;
+  control_loop_vj_enc_bad_ms = 0U;
+  control_loop_state = CONTROL_LOOP_STATE_VJ_DIAG;
+  control_loop_state_tick = HAL_GetTick();
+  (void)snprintf(line, sizeof(line),
+                 "[VJ] diag armed: dir=%+d pp=%u offset=%+.4f map=%u/%u/%u sign=%d/%d R=%.3f",
+                 (int)control_loop_parameters.rotor.encoder_direction,
+                 (unsigned)control_loop_parameters.rotor.pole_pairs,
+                 (double)control_loop_parameters.rotor.electrical_offset_rad,
+                 (unsigned)control_loop_parameters.phase_map.phase_a_output,
+                 (unsigned)control_loop_parameters.phase_map.phase_b_output,
+                 (unsigned)control_loop_parameters.phase_map.phase_c_output,
+                 (int)control_loop_parameters.current.channel_u_sign,
+                 (int)control_loop_parameters.current.channel_v_sign,
+                 (double)control_loop_static_r_ohm);
+  control_loop_log(line);
+  control_loop_log("[READY] VJ diag: p=power-on x=abort (d/e=+-Vd q/w=+-Vq g=rotate)");
+  return CONTROL_LOOP_COMMAND_ACCEPTED;
+}
+
+control_loop_command_status_t control_loop_request_vj_power(void)
+{
+  if ((control_loop_state != CONTROL_LOOP_STATE_VJ_DIAG) ||
+      (control_loop_vj_sub != VJ_SUB_IDLE))
+  {
+    return CONTROL_LOOP_COMMAND_REJECTED_STATE;
+  }
+  foc_runtime_set_test_mode(1U);
+  if (control_loop_start_openloop_power() == 0U)
+  {
+    return CONTROL_LOOP_COMMAND_REJECTED_CURRENT_NOT_READY; /* 内部已 enter_fault */
+  }
+  control_loop_log("[VJ] power on: VOLTAGE openloop, encoder angle");
+  control_loop_vj_sub = VJ_SUB_HOLD;
+  control_loop_vj_tick = HAL_GetTick();
+  control_loop_vj_enc_bad_ms = 0U;
+  return CONTROL_LOOP_COMMAND_ACCEPTED;
+}
+
+control_loop_command_status_t control_loop_request_vj_inject(uint8_t axis_q, float sign)
+{
+  float amplitude;
+
+  if ((control_loop_state != CONTROL_LOOP_STATE_VJ_DIAG) ||
+      (control_loop_vj_sub != VJ_SUB_HOLD))
+  {
+    return CONTROL_LOOP_COMMAND_REJECTED_STATE;
+  }
+  amplitude = CALIB_VJ_INJECT_V * ((sign < 0.0f) ? -1.0f : 1.0f);
+  if (axis_q == 0U)
+  {
+    control_loop_vj_vd = amplitude;
+    control_loop_vj_vq = 0.0f;
+  }
+  else
+  {
+    control_loop_vj_vd = 0.0f;
+    control_loop_vj_vq = amplitude;
+  }
+  control_loop_vj_axis_q = axis_q;
+  control_loop_vj_id_sum = 0.0f;
+  control_loop_vj_iq_sum = 0.0f;
+  control_loop_vj_du_sum = 0.0f;
+  control_loop_vj_dv_sum = 0.0f;
+  control_loop_vj_n = 0U;
+  control_loop_vj_sub = VJ_SUB_PULSE;
+  control_loop_vj_tick = HAL_GetTick();
+  return CONTROL_LOOP_COMMAND_ACCEPTED;
+}
+
+control_loop_command_status_t control_loop_request_vj_sweep(void)
+{
+  if ((control_loop_state != CONTROL_LOOP_STATE_VJ_DIAG) ||
+      (control_loop_vj_sub != VJ_SUB_HOLD))
+  {
+    return CONTROL_LOOP_COMMAND_REJECTED_STATE;
+  }
+  control_loop_vj_vd = 0.0f;
+  control_loop_vj_vq = CALIB_VJ_INJECT_V;
+  control_loop_vj_id_sum = 0.0f;
+  control_loop_vj_iq_sum = 0.0f;
+  control_loop_vj_n = 0U;
+  control_loop_vj_tlm_ms = 0U;
+  control_loop_vj_sub = VJ_SUB_SWEEP;
+  control_loop_vj_tick = HAL_GetTick();
+  control_loop_log("[VJT] sweep start: vq=+0.30V, 50ms telemetry");
+  return CONTROL_LOOP_COMMAND_ACCEPTED;
+}
+
+control_loop_command_status_t control_loop_request_vj_exit(void)
+{
+  if (control_loop_state != CONTROL_LOOP_STATE_VJ_DIAG)
+  {
+    return CONTROL_LOOP_COMMAND_REJECTED_STATE;
+  }
+  control_loop_safe_disable();
+  control_loop_vj_sub = VJ_SUB_IDLE;
+  control_loop_vj_vd = 0.0f;
+  control_loop_vj_vq = 0.0f;
+  /* 回 TEST_READY：序列位置（next_step）原样保留，poll 会重新 [READY] 下一步。 */
+  control_loop_state = CONTROL_LOOP_STATE_TEST_READY;
+  control_loop_state_tick = HAL_GetTick();
+  control_loop_log("[VJ] exit; back to sequence");
+  return CONTROL_LOOP_COMMAND_ACCEPTED;
+}
+
 void control_loop_load_committed_parameters(const motor_parameter_package_t *package)
 {
   float effective_r;
@@ -1182,7 +1430,10 @@ void control_loop_load_committed_parameters(const motor_parameter_package_t *pac
     return;
   }
   /* FR-2.4：PARAMETER_CHECK 通过后注入。先存镜像 + 从 v2 字段重建 R 学习状态
-   * （rlearn_cfg 在 control_loop_init 已配好），再灌入控制参数集。 */
+   * （rlearn_cfg 在 control_loop_init 已配好），再灌入控制参数集。
+   * phase_map 刻意不写入参数集：P3 恒等契约（2026-09-13）——S1a–S4 必须恒等、
+   * PHASE_SEQ 每靴重探覆写；此处写入会在 boot 后不经 r 直接 p 的流程污染 S1a
+   * （通道交叉假故障）。运行态取 map 走 loaded 镜像/固化包，不经测试参数集。 */
   control_loop_loaded = *package;
   control_loop_loaded_valid = 1U;
   resistance_learning_load(&control_loop_rlearn,
@@ -1196,9 +1447,6 @@ void control_loop_load_committed_parameters(const motor_parameter_package_t *pac
   control_loop_parameters.rotor.electrical_offset_rad = package->electrical_offset_rad;
   control_loop_parameters.current.channel_u_sign = (float)package->current_sign_u;
   control_loop_parameters.current.channel_v_sign = (float)package->current_sign_v;
-  control_loop_parameters.phase_map.phase_a_output = package->phase_map_a;
-  control_loop_parameters.phase_map.phase_b_output = package->phase_map_b;
-  control_loop_parameters.phase_map.phase_c_output = package->phase_map_c;
   control_loop_static_r_ohm = package->phase_resistance_ohm;
   control_loop_static_l_h = package->phase_inductance_h;
   control_loop_phase_seq_verified = package->phase_seq_verified;
@@ -2515,10 +2763,13 @@ void control_loop_poll(void)
         control_loop_s7_mech_delta +=
             foc_angle_wrap_signed_rad(mech_now - control_loop_s7_mech_prev);
         control_loop_s7_mech_prev = mech_now;
-        /* FR-1.2：动态 R 块统计（1 ms/拍；|Iq| 门与建立段剔除在库内）。 */
-        calib_s7_dyn_r_feed(&control_loop_s7_accum, &control_loop_s7_cfg,
-                            output->voltage_command_v.q,
-                            output->measured_current_a.q);
+        /* 判据 v2：窗电压累计（建立段后；id/iq 的 tick 均值累计在遥测块处）。 */
+        if (elapsed > (uint32_t)CALIB_S7_SETTLE_SKIP_MS)
+        {
+          control_loop_s7_wvd_sum += output->voltage_command_v.d;
+          control_loop_s7_wvq_sum += output->voltage_command_v.q;
+          control_loop_s7_vn++;
+        }
       }
       /* 失步早期检测（建立段豁免）：错误电角度下 Iq 永远追不到目标、Vq 持续
        * 贴限；双条件同时保持 HOLD 时长，就在 ADC 贴轨之前温柔撤功率。
@@ -2555,19 +2806,55 @@ void control_loop_poll(void)
           break;
         }
       }
-      /* S7 周期遥测：失步演化（id/iq/vd/vq）直接可见，不再只能从事后日志反推。 */
+      /* S7 周期遥测与判据 v2 窗统计：瞬时值 + 50ms 窗均值并列；
+       * 建立段后累计，窗尾结算 EMF-free 比值 wvd/wid 并喂全程累计。 */
+      if ((have_tick_mean != 0U) && (elapsed > (uint32_t)CALIB_S7_SETTLE_SKIP_MS))
+      {
+        control_loop_s7_wid_sum += judge_id;
+        control_loop_s7_wiq_sum += judge_iq;
+        control_loop_s7_wn++;
+      }
       if ((uint32_t)(elapsed - control_loop_s7_dbg_ms) >= CALIB_S7_DBG_PERIOD_MS)
       {
-        char dbg_line[160];
+        char dbg_line[176];
+        float win_id, win_iq, win_vd;
         control_loop_s7_dbg_ms = elapsed;
+        win_id = (control_loop_s7_wn > 0U)
+            ? control_loop_s7_wid_sum / (float)control_loop_s7_wn : 0.0f;
+        win_iq = (control_loop_s7_wn > 0U)
+            ? control_loop_s7_wiq_sum / (float)control_loop_s7_wn : 0.0f;
+        win_vd = (control_loop_s7_vn > 0U)
+            ? control_loop_s7_wvd_sum / (float)control_loop_s7_vn : 0.0f;
         (void)snprintf(dbg_line, sizeof(dbg_line),
-                       "[S7DBG] t=%lums id=%.4f iq=%.4f vd=%.3f vq=%.3f",
+                       "[S7DBG] t=%lums id=%.4f iq=%.4f vd=%.3f vq=%.3f wid=%.4f wiq=%.4f wn=%u",
                        (unsigned long)elapsed,
                        (double)output->measured_current_a.d,
                        (double)output->measured_current_a.q,
                        (double)output->voltage_command_v.d,
-                       (double)output->voltage_command_v.q);
+                       (double)output->voltage_command_v.q,
+                       (double)win_id, (double)win_iq,
+                       (unsigned)control_loop_s7_wn);
         control_loop_log(dbg_line);
+        /* 全程窗均值累计（每窗等权），供调节品质门。 */
+        if (control_loop_s7_wn > 0U)
+        {
+          control_loop_s7_cap_wid_sum += win_id;
+          control_loop_s7_cap_wiq_sum += win_iq;
+          control_loop_s7_cap_wn++;
+          /* EMF-free 比值：vd 只含阻性项（EMF 落 q 轴），近零 wid 窗不产生比值。 */
+          if ((win_id >= CALIB_S7_WRATIO_MIN_WID_A) &&
+              (control_loop_s7_wratio_n < CALIB_S7_WINDOW_COUNT))
+          {
+            control_loop_s7_wratio[control_loop_s7_wratio_n] = win_vd / win_id;
+            control_loop_s7_wratio_n++;
+          }
+        }
+        control_loop_s7_wid_sum = 0.0f;
+        control_loop_s7_wiq_sum = 0.0f;
+        control_loop_s7_wn = 0U;
+        control_loop_s7_wvd_sum = 0.0f;
+        control_loop_s7_wvq_sum = 0.0f;
+        control_loop_s7_vn = 0U;
       }
       if (elapsed >= TEST_CAPTURE_TIME_MS)
       {
@@ -2577,6 +2864,150 @@ void control_loop_poll(void)
         control_loop_judge_s7_and_create_candidate();
       }
       break;
+
+    case CONTROL_LOOP_STATE_VJ_DIAG:
+    {
+      const encoder_cache_sample_t *vj_enc = encoder_cache_get_latest();
+      const motor_current_sample_t *vj_raw = motor_adc_get_latest_sample();
+      foc_rotor_sample_t vj_rotor;
+      uint32_t vj_elapsed;
+
+      if (control_loop_vj_sub == VJ_SUB_IDLE)
+      {
+        break; /* 未上功率，等 p */
+      }
+      if (control_loop_runtime_ok() == 0U) break;
+      /* 角度供给与 S7 同源：编码器连续出角，保证测的就是 S7 那条链。
+       * 去抖（2026-09-13 上板教训）：使能瞬间栅驱 boost 瞬态可能干扰一次 I2C
+       * 读数（cache 单次失败即 valid=0），单次无效不判故障——保持上一帧角度
+       * 继续运行；连续无效达 CALIB_VJ_ENC_INVALID_FAULT_MS 才是真故障。 */
+      if ((encoder_cache_is_valid(20U) == 0U) ||
+          (foc_rotor_model_convert(&control_loop_parameters.rotor,
+                                   vj_enc->raw_angle, &vj_rotor) != FOC_STATUS_OK))
+      {
+        control_loop_vj_enc_bad_ms++;
+        if (control_loop_vj_enc_bad_ms >= CALIB_VJ_ENC_INVALID_FAULT_MS)
+        {
+          control_loop_log("[FAULT] VJ encoder chain invalid (held)");
+          control_loop_enter_fault(CONTROL_LOOP_FAULT_ENCODER);
+          break;
+        }
+      }
+      else
+      {
+        control_loop_vj_enc_bad_ms = 0U;
+        foc_runtime_set_forced_angle(vj_rotor.electrical_angle_rad);
+        control_loop_vj_theta = vj_rotor.electrical_angle_rad;
+      }
+      vj_elapsed = (uint32_t)(now_ms - control_loop_vj_tick);
+
+      switch (control_loop_vj_sub)
+      {
+        case VJ_SUB_HOLD:
+          foc_runtime_set_voltage_target(0.0f, 0.0f);
+          break;
+
+        case VJ_SUB_PULSE:
+        {
+          char line[176];
+          float mean_id, mean_iq, mean_du, mean_dv;
+          foc_runtime_set_voltage_target(control_loop_vj_vd, control_loop_vj_vq);
+          /* 跳过建立段后累计拍均值（judge_id/iq 来自快路径 tick mean）。 */
+          if ((vj_elapsed >= (uint32_t)CALIB_VJ_PULSE_SKIP_MS) &&
+              (vj_raw->valid != 0U) && (vj_raw->saturated == 0U) &&
+              (vj_raw->timeout == 0U))
+          {
+            control_loop_vj_id_sum += judge_id;
+            control_loop_vj_iq_sum += judge_iq;
+            control_loop_vj_du_sum += (float)vj_raw->phase_u_raw -
+                control_loop_parameters.current.channel_u_zero_raw;
+            control_loop_vj_dv_sum += (float)vj_raw->phase_v_raw -
+                control_loop_parameters.current.channel_v_zero_raw;
+            control_loop_vj_n++;
+          }
+          if (vj_elapsed >= (uint32_t)CALIB_VJ_PULSE_MS)
+          {
+            mean_id = (control_loop_vj_n > 0U)
+                ? control_loop_vj_id_sum / (float)control_loop_vj_n : 0.0f;
+            mean_iq = (control_loop_vj_n > 0U)
+                ? control_loop_vj_iq_sum / (float)control_loop_vj_n : 0.0f;
+            mean_du = (control_loop_vj_n > 0U)
+                ? control_loop_vj_du_sum / (float)control_loop_vj_n : 0.0f;
+            mean_dv = (control_loop_vj_n > 0U)
+                ? control_loop_vj_dv_sum / (float)control_loop_vj_n : 0.0f;
+            (void)snprintf(line, sizeof(line),
+                "[VJ] th=%+.3f v%s=%+.2f -> id=%+.4f iq=%+.4f (n=%u) dU=%+.1f dV=%+.1f",
+                (double)control_loop_vj_theta,
+                (control_loop_vj_axis_q != 0U) ? "q" : "d",
+                (double)((control_loop_vj_axis_q != 0U) ? control_loop_vj_vq
+                                                        : control_loop_vj_vd),
+                (double)mean_id, (double)mean_iq,
+                (unsigned)control_loop_vj_n,
+                (double)mean_du, (double)mean_dv);
+            control_loop_log(line);
+            foc_runtime_set_voltage_target(0.0f, 0.0f);
+            control_loop_vj_vd = 0.0f;
+            control_loop_vj_vq = 0.0f;
+            control_loop_vj_sub = VJ_SUB_HOLD;
+            control_loop_vj_tick = now_ms;
+          }
+          break;
+        }
+
+        case VJ_SUB_SWEEP:
+        {
+          char line[176];
+          float sweep_id, sweep_iq;
+          foc_runtime_set_voltage_target(control_loop_vj_vd, control_loop_vj_vq);
+          if ((vj_raw->valid != 0U) && (vj_raw->saturated == 0U) &&
+              (vj_raw->timeout == 0U))
+          {
+            control_loop_vj_id_sum += judge_id;
+            control_loop_vj_iq_sum += judge_iq;
+            control_loop_vj_n++;
+          }
+          if ((uint32_t)(now_ms - control_loop_vj_tlm_ms) >=
+              (uint32_t)CALIB_VJ_SWEEP_TLM_MS)
+          {
+            control_loop_vj_tlm_ms = now_ms;
+            (void)snprintf(line, sizeof(line),
+                "[VJT] t=%lums th=%+.3f id=%+.4f iq=%+.4f vq=%+.2f dU=%+.1f dV=%+.1f",
+                (unsigned long)vj_elapsed,
+                (double)control_loop_vj_theta,
+                (double)output->measured_current_a.d,
+                (double)output->measured_current_a.q,
+                (double)control_loop_vj_vq,
+                (double)((float)vj_raw->phase_u_raw -
+                         control_loop_parameters.current.channel_u_zero_raw),
+                (double)((float)vj_raw->phase_v_raw -
+                         control_loop_parameters.current.channel_v_zero_raw));
+            control_loop_log(line);
+          }
+          if (vj_elapsed >= (uint32_t)CALIB_VJ_SWEEP_MS)
+          {
+            sweep_id = (control_loop_vj_n > 0U)
+                ? control_loop_vj_id_sum / (float)control_loop_vj_n : 0.0f;
+            sweep_iq = (control_loop_vj_n > 0U)
+                ? control_loop_vj_iq_sum / (float)control_loop_vj_n : 0.0f;
+            (void)snprintf(line, sizeof(line),
+                "[VJT] sweep done: mean id=%+.4f iq=%+.4f (n=%lu); voltage to zero",
+                (double)sweep_id, (double)sweep_iq,
+                (unsigned long)control_loop_vj_n);
+            control_loop_log(line);
+            foc_runtime_set_voltage_target(0.0f, 0.0f);
+            control_loop_vj_vd = 0.0f;
+            control_loop_vj_vq = 0.0f;
+            control_loop_vj_sub = VJ_SUB_HOLD;
+            control_loop_vj_tick = now_ms;
+          }
+          break;
+        }
+
+        default:
+          break;
+      }
+      break;
+    }
 
     case CONTROL_LOOP_STATE_POWER_ARMED:
     case CONTROL_LOOP_STATE_TEST_ALIGN: /* 旧独立对齐步已被 S1 取代，保留枚举不可达 */
@@ -2616,6 +3047,7 @@ const char *control_loop_state_text(control_loop_state_t state)
     case CONTROL_LOOP_STATE_FORCED_CURRENT: return "FORCED_CURRENT";
     case CONTROL_LOOP_STATE_PI_VALIDATE: return "PI_VALIDATE";
     case CONTROL_LOOP_STATE_LIMITED_FOC_READY: return "LIMITED_FOC_READY";
+    case CONTROL_LOOP_STATE_VJ_DIAG: return "VJ_DIAG";
     case CONTROL_LOOP_STATE_STOPPING: return "STOPPING";
     case CONTROL_LOOP_STATE_FAULT: return "FAULT";
     default: return "UNKNOWN";

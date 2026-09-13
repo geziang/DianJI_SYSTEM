@@ -3,7 +3,10 @@
 #include "main.h"
 #include "mt6701.h"
 
-#define ENCODER_CACHE_POLL_PERIOD_MS (5U)
+/* 2026-09-13 Phase A 实验（L4 根因=5ms 角度台阶）：轮询 5ms->1ms，I2C 仍 100kHz。
+ * 实际更新率由主循环节拍与 0.45ms 阻塞读角共同决定（约 600Hz），角度平均滞后
+ * 从 ~17 降到 ~6 电角度（@ωe=130rad/s）。若上板出现 I2C 失败计数上升则回退 5ms。 */
+#define ENCODER_CACHE_POLL_PERIOD_MS (1U)
 
 static encoder_cache_sample_t encoder_cache_sample;
 static uint32_t encoder_cache_last_poll_ms;

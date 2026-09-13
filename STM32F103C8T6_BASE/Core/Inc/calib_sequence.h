@@ -100,8 +100,10 @@ typedef struct
 } calib_s2_result_t;
 
 /* 输入：三档稳态 Id 均值与对应 Vd 均值（长度均为 3）。
- * 单次可信门（FR-1.5 第 1 级）：r2 达 CALIB_S2_FIT_R2_MIN、斜率在标称区间、
- * 且 |截距 Voff| <= CALIB_S2_VOFF_MAX_V（样本数=3 档由 S2 引擎保证）。 */
+ * 本函数只判 r2 >= CALIB_S2_FIT_R2_MIN、斜率为正且落在标称区间；
+ * FR-1.5 第 1 级单次可信门的 |Voff| <= CALIB_S2_VOFF_MAX_V 由调用方
+ * （control_loop S2 EVALUATE 分支）在 evaluate 通过后另行判定并记录
+ * control_loop_s2_trusted（样本数=3 档由 S2 引擎保证）。 */
 uint8_t calib_sequence_s2_evaluate(const float id3[3], const float vd3[3],
                                    float r_nominal_ohm, calib_s2_result_t *out);
 
@@ -238,38 +240,10 @@ uint8_t calib_sequence_s5_eval(const float *offsets, uint8_t n, uint8_t fwd_half
                                float circ_std_max_rad, float fwd_rev_diff_max_rad,
                                calib_s5_result_t *out);
 
-/* ============ S7 低速捕获动态 R 统计（SPEC-RUN FR-1.2，纯函数） ============
- * 输入：捕获稳态段按块分组的 Vq/Iq 块均值数组（建立段样本由 caller 剔除），
- * raw_samples 为原始有效样本总数（诊断打印用）。
- * 统计：块均值数组做截尾均值（两端各丢 trim_each 个块）替代全样本均值，
- * 抗个别块受换相/抖动污染；空样本与超窗分列独立状态码，不混为一谈。 */
-typedef enum
-{
-  CALIB_S7_R_OK = 0,
-  CALIB_S7_R_NO_SAMPLES,     /* 样本数为零/不足（区分于超窗丢弃） */
-  CALIB_S7_R_BELOW_WINDOW,   /* 低于候选窗下界 */
-  CALIB_S7_R_ABOVE_WINDOW    /* 高于候选窗上界 */
-} calib_s7_r_status_t;
-
-typedef struct
-{
-  calib_s7_r_status_t status;
-  float dyn_r_ohm;           /* 截尾均值估计 */
-  uint16_t block_count;      /* 参与统计的块数 */
-  uint16_t raw_samples;      /* 原始有效样本总数（透传打印） */
-  float window_lo_ohm;       /* 候选窗下界（base*lo_ratio） */
-  float window_hi_ohm;       /* 候选窗上界（base*hi_ratio） */
-  float base_r_ohm;          /* 窗基准=本次 S2 实测 R（FR-1.5 双源交叉） */
-} calib_s7_r_result_t;
-
-/* base_r_ohm 为候选窗基准（本次 S2 实测 R）；返回 status 并填充 out。 */
-calib_s7_r_status_t calib_sequence_s7_dynamic_r(const float *block_mean,
-                                                uint16_t block_count,
-                                                uint16_t raw_samples,
-                                                float base_r_ohm,
-                                                float lo_ratio, float hi_ratio,
-                                                uint16_t trim_each,
-                                                calib_s7_r_result_t *out);
+/* S7 低速捕获动态 R 统计的实现不在本模块：见 calib_stats.h 的
+ * calib_s7_dyn_r_init/feed/finalize（建立段剔除/|Iq| 门/分块/截尾）与
+ * control_loop.c 的 control_loop_judge_s7_and_create_candidate（候选窗判决）。
+ * （历史备注：曾计划放本模块的 calib_sequence_s7_dynamic_r 接口已废弃删除。） */
 
 #ifdef __cplusplus
 }

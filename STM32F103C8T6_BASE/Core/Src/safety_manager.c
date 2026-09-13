@@ -50,8 +50,9 @@ void safety_manager_poll(void)
       }
       else
       {
-        /* FR-2.4：加载成功的已固化包注入控制参数集（换相/符号/转子/静态 R、L
-         * + v2 学习值重建），日志打印来源页/revision。 */
+        /* FR-2.4：加载成功的已固化包注入控制参数集（符号/转子/静态 R、L
+         * + v2 学习值重建），日志打印来源页/revision。
+         * phase_map 不注入（P3 恒等契约 2026-09-13），只存 control_loop_loaded 镜像。 */
         control_loop_load_committed_parameters(&parameters);
         safety_manager_state = SAFETY_MANAGER_STATE_ADC_ZERO_REFRESH;
       }

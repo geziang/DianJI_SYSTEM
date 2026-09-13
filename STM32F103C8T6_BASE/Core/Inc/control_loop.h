@@ -42,6 +42,7 @@ typedef enum
   CONTROL_LOOP_STATE_FORCED_CURRENT,
   CONTROL_LOOP_STATE_PI_VALIDATE,
   CONTROL_LOOP_STATE_LIMITED_FOC_READY,
+  CONTROL_LOOP_STATE_VJ_DIAG,
   CONTROL_LOOP_STATE_STOPPING,
   CONTROL_LOOP_STATE_FAULT
 } control_loop_state_t;
@@ -94,6 +95,18 @@ control_loop_state_t control_loop_get_state(void);
 control_loop_fault_t control_loop_get_fault(void);
 const char *control_loop_state_text(control_loop_state_t state);
 const char *control_loop_fault_text(control_loop_fault_t fault);
+
+/* ---- VJ 电压注入判决模式（L4 诊断工具，不在 S0-S8 序列内，不产候选不落盘） ----
+ * v=进入（静默态 + 编码器在线 + 零偏 OK；沿用当前 RAM 里的转子/换相/符号配置，
+ * 打印生效配置供解读）→ p=VOLTAGE 开环上功率（编码器连续出角）→
+ * d/e=±Vd、q/w=±Vq 静止脉冲（CALIB_VJ_PULSE_MS，末段均值打印 [VJ] 行）、
+ * g=vq 旋转扫描（CALIB_VJ_SWEEP_MS，[VJT] 遥测）→ x=退出回序列。 */
+control_loop_command_status_t control_loop_request_vj_start(void);
+control_loop_command_status_t control_loop_request_vj_power(void);
+/* axis_q=0 注入 Vd 轴、1 注入 Vq 轴；sign 取 +1/-1。仅在 VJ 上电后的保持期接受。 */
+control_loop_command_status_t control_loop_request_vj_inject(uint8_t axis_q, float sign);
+control_loop_command_status_t control_loop_request_vj_sweep(void);
+control_loop_command_status_t control_loop_request_vj_exit(void);
 
 #ifdef __cplusplus
 }

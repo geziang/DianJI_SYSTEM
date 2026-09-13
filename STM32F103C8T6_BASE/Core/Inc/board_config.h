@@ -83,6 +83,15 @@ extern "C" {
 #define BOARD_CONFIG_PWM_ADC_TRIGGER_CONFIGURED      (1U)
 
 /*
+ * ADC 触发时刻相对 TIM2 PWM 的相位偏移（TIM3 计数预置 ticks @72MHz，
+ * ARR=7199 对应一个 100us PWM 周期）。0 = 保持现状。
+ * L4 判决若指向采样时刻（VJ 静止注入干净 / 旋转扫描脏），用此宏扫触发
+ * 相位窗（如 1800=1/4 周期、3600=半周期，或 ±1000/±3000 ≈ ±14/±42us），
+ * 每次改值重烧，对比 [VJT]/[S7DBG] 数据随相位的变化。
+ */
+#define BOARD_CONFIG_ADC_TRIGGER_OFFSET_TICKS        (0U)
+
+/*
  * V3P 原理图存在 POWER_ADC 母线电压采样网络；当前 F103 转接板和 CubeMX
  * 没有把该网络接入 ADC。母线电压软件保护因此不可用。
  */

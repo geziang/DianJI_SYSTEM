@@ -368,11 +368,20 @@ motor_adc_status_t motor_adc_start_synchronized(void)
   {
     motor_adc_synchronised = 0U;
   }
-  else if (HAL_TIM_Base_Start(board_config_get_current_sample_timer()) != HAL_OK)
+  else
   {
-    motor_adc_stop_dma(board_config_get_motor_adc());
-    motor_adc_synchronised = 0U;
-    return MOTOR_ADC_STATUS_HAL_ERROR;
+#if (BOARD_CONFIG_ADC_TRIGGER_OFFSET_TICKS != 0U)
+    /* L4 诊断：预置 TIM3 计数，平移 ADC 触发时刻相对 TIM2 PWM 的相位
+     * （默认 0 时本段整体编出，行为与历史构建一致）。 */
+    __HAL_TIM_SET_COUNTER(board_config_get_current_sample_timer(),
+                          (uint32_t)BOARD_CONFIG_ADC_TRIGGER_OFFSET_TICKS);
+#endif
+    if (HAL_TIM_Base_Start(board_config_get_current_sample_timer()) != HAL_OK)
+    {
+      motor_adc_stop_dma(board_config_get_motor_adc());
+      motor_adc_synchronised = 0U;
+      return MOTOR_ADC_STATUS_HAL_ERROR;
+    }
   }
   return status;
 }

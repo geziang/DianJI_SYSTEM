@@ -44,8 +44,10 @@ void app_baseline_init(void)
 
   debug_log_init(board_config_get_debug_uart());
   debug_log_write_line("STM32F103C8T6 identification test " APP_BASELINE_VERSION);
+  /* 构建身份自证：日志与代码树可对齐（排除 written!=verified，L4 嫌疑①）。 */
+  debug_log_write_line("build: " __DATE__ " " __TIME__);
   debug_log_write_line("safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot");
-  debug_log_write_line("cmds: p=confirm step r=restart a=apply d=discard x=stop c=clear(fault|storage) i/?=diag");
+  debug_log_write_line("cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) v=VJ-diag i/?=diag");
 
   safety_manager_init();
   encoder_cache_init();
@@ -111,17 +113,36 @@ static void app_baseline_handle_command(uint8_t command)
 {
   control_loop_command_status_t status;
   uint8_t safety_cleared;
+  uint8_t in_vj;
+
+  /* VJ 诊断态优先消费诊断键（d/e/q/w/g），其余键保持原语义。 */
+  in_vj = (control_loop_get_state() == CONTROL_LOOP_STATE_VJ_DIAG) ? 1U : 0U;
 
   switch (command)
   {
+    case 'v':
+    case 'V':
+      status = control_loop_request_vj_start();
+      debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
+                           "[CMD] VJ armed" : "[CMD] VJ rejected (gate)");
+      break;
     case 's':
     case 'S':
       debug_log_write_line("[CMD] open-loop path is disabled in identification firmware; use r then p");
       break;
     case 'x':
     case 'X':
-      control_loop_request_stop();
-      debug_log_write_line("[CMD] stop requested");
+      if (in_vj != 0U)
+      {
+        status = control_loop_request_vj_exit();
+        debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
+                             "[CMD] VJ exit" : "[CMD] VJ rejected (state)");
+      }
+      else
+      {
+        control_loop_request_stop();
+        debug_log_write_line("[CMD] stop requested");
+      }
       break;
     case 'r':
     case 'R':
@@ -133,10 +154,21 @@ static void app_baseline_handle_command(uint8_t command)
     case 'p':
     case 'P':
       /* accepted 的启动证据由 control_loop 的 [RUN] 行给出，这里只回显拒绝原因。 */
-      status = control_loop_request_power_confirm();
-      if (status != CONTROL_LOOP_COMMAND_ACCEPTED)
+      if (in_vj != 0U)
       {
-        debug_log_write_line("[CMD] power step rejected: wait for POWER_ARMED");
+        status = control_loop_request_vj_power();
+        if (status != CONTROL_LOOP_COMMAND_ACCEPTED)
+        {
+          debug_log_write_line("[CMD] VJ rejected (state)");
+        }
+      }
+      else
+      {
+        status = control_loop_request_power_confirm();
+        if (status != CONTROL_LOOP_COMMAND_ACCEPTED)
+        {
+          debug_log_write_line("[CMD] power step rejected: wait for POWER_ARMED");
+        }
       }
       break;
     case 'a':
@@ -148,10 +180,55 @@ static void app_baseline_handle_command(uint8_t command)
       break;
     case 'd':
     case 'D':
-      status = control_loop_request_candidate_discard();
-      debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
-                           "[CMD] candidate discarded" :
-                           "[CMD] discard rejected: no candidate review");
+      if (in_vj != 0U)
+      {
+        status = control_loop_request_vj_inject(0U, 1.0f);
+        debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
+                             "[CMD] VJ pulse" : "[CMD] VJ rejected (state)");
+      }
+      else
+      {
+        status = control_loop_request_candidate_discard();
+        debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
+                             "[CMD] candidate discarded" :
+                             "[CMD] discard rejected: no candidate review");
+      }
+      break;
+    case 'e':
+    case 'E':
+      if (in_vj != 0U)
+      {
+        status = control_loop_request_vj_inject(0U, -1.0f);
+        debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
+                             "[CMD] VJ pulse" : "[CMD] VJ rejected (state)");
+      }
+      break;
+    case 'q':
+    case 'Q':
+      if (in_vj != 0U)
+      {
+        status = control_loop_request_vj_inject(1U, 1.0f);
+        debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
+                             "[CMD] VJ pulse" : "[CMD] VJ rejected (state)");
+      }
+      break;
+    case 'w':
+    case 'W':
+      if (in_vj != 0U)
+      {
+        status = control_loop_request_vj_inject(1U, -1.0f);
+        debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
+                             "[CMD] VJ pulse" : "[CMD] VJ rejected (state)");
+      }
+      break;
+    case 'g':
+    case 'G':
+      if (in_vj != 0U)
+      {
+        status = control_loop_request_vj_sweep();
+        debug_log_write_line((status == CONTROL_LOOP_COMMAND_ACCEPTED) ?
+                             "[CMD] VJ sweep" : "[CMD] VJ rejected (state)");
+      }
       break;
     case 'c':
     case 'C':

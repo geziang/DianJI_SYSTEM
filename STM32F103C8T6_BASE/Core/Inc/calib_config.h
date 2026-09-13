@@ -44,7 +44,7 @@ extern "C" {
  *       得到一组 (Vd, du, dv)；正向扫到电流进目标带即收，回零后反向扫相同档数；
  *       EVAL 对正/负点做一阶最小二乘，斜率符号定 sign、斜率比定通道、斜率反推粗 R、
  *       截距反推死区/管压降等效电压。以"实测电流进带"为主闸门，VEND 仅作采样失效兜底。 */
-#define CALIB_S1_ALIGN_CURRENT_A       (0.20f) /* S1b 闭环自证目标 Id，大信号压噪 */
+#define CALIB_S1_ALIGN_CURRENT_A       (0.50f) /* S1b 闭环自证目标 Id，临界大信号压噪（0.2→0.5A，2026-09-13 工作点上调），【待整定】 */
 #define CALIB_S1A_LEVEL_START_V        (0.05f) /* 爬坡起始电压档（大概率在非线性区，拟合跳过），【待整定】 */
 #define CALIB_S1A_LEVEL_STEP_V         (0.03f) /* 每档电压增量，【待整定】 */
 #define CALIB_S1A_LEVEL_MAX            (10U)   /* 单方向最多档数（=static 点缓冲维度） */
@@ -68,13 +68,13 @@ extern "C" {
 #define CALIB_S1B_IQ_MAX_A             (0.02f) /* S1b 闭环自证 Iq≈0 上限 */
 #define CALIB_S1_RATIO_TARGET          (-0.5f) /* 期望 slope_v/slope_u = -1/2 */
 #define CALIB_S1_RATIO_TOL             (0.15f) /* 比值容差，【待整定】 */
-#define CALIB_S1_SETTLE_BAND_A         (0.010f)/* S1b：Id 进入目标±10mA 算稳定，【待整定】 */
+#define CALIB_S1_SETTLE_BAND_A         (0.015f)/* S1b：Id 进入目标±15mA 算稳定（随 0.5A 目标同步放宽，保持 ~3% 相对容差），【待整定】 */
 
 /* ---- 手动对齐保持（仅诊断用：发 p 后锁 θ=0 持续注入固定 Vd，按 x 才停，供手转感受锁止/阻尼） ----
  * 1=诊断保持模式（不跑自动爬坡、不判据、不自动撤、不受总看门狗限时）；
  * 0=正常 S1a 流程。诊断结束保持 0。 */
 #define CALIB_S1A_MANUAL_HOLD          (0U)
-#define CALIB_S1A_HOLD_VOLTAGE_V       (0.15f) /* 保持注入电压（R=2.3 时约 65mA，弱小对齐力矩），【诊断】 */
+#define CALIB_S1A_HOLD_VOLTAGE_V       (1.5f) /* 保持注入电压（对齐 P3 档位 ≈0.45A；2026-09-13 由 0.15V 上调），【诊断】 */
 
 /* ---- S1a 静态三角度相序/符号探针 PROBE3（电流对齐：电机锁定不转，自动解采样符号+校验通道） ----
  * 1=S1a 走 PROBE3（推荐主路径）；它只定两个采样通道符号 sign_u/v 与"U↔半桥1、V↔半桥2"通道
@@ -165,20 +165,35 @@ extern "C" {
 
 /* ============ S7 低速编码器闭环交叉验证 ============ */
 /* SPEC-RUN FR-1.1：工作点移出小信号区（<0.1A 死区/管压降主导，见 2.2/2.3 节）。
- * id 提供磁场阻尼与稳定工作点，iq 驱动低速旋转并作动态 R 观测激励；
- * 精确值上板整定后回填本文件与 L6 调试记录。 */
-#define CALIB_S7_ID_TARGET_A           (0.10f) /* 低速闭环 Id，【待整定】 */
-#define CALIB_S7_IQ_DRIVE_A            (0.18f) /* 低速闭环 Iq 驱动（0.15-0.2A 工程窗口），【待整定】 */
-/* 累计门限与新工作点联动（FR-1.1：禁止"目标 0.18A、门限 0.01A"形同虚设）：
- * 动态 R 样本只收录 |Iq| >= IQ_DRIVE * RATIO 的拍。 */
+ * 【2026-09-13 二次整定（owner 拍板"临界大信号"）】id 0.10→0.40A：测量轴信号
+ * 最大化（R·id≈1.3V，稀释 EMF 经角度滞后的 d 轴泄漏占比）+ 增强磁场阻尼；
+ * iq 0.18→0.30A：|I|=0.50A 顶工程窗口上沿；iq 不再高——转速/EMF/滞后角均随
+ * iq 增长，弊大于利（>0.6A 进磁饱和+积热区，见 20260910 复盘"不迷信大信号"）。 */
+#define CALIB_S7_ID_TARGET_A           (0.40f) /* 低速闭环 Id，【待整定】 */
+#define CALIB_S7_IQ_DRIVE_A            (0.30f) /* 低速闭环 Iq 驱动，【待整定】 */
+/* 累计门限与新工作点联动（FR-1.1：禁止"目标 0.18A、门限 0.01A"形同虚设）。
+ * 【判据 v2 注记 2026-09-13】DYN_R_MIN_IQ_RATIO 与 STAT_BLOCK_MS/STAT_BLOCKS
+ * 属旧"瞬时值分块统计"路线，已被 S7 v2 窗均值判据取代（不再被 control_loop
+ * 引用）；宏保留供 calib_s7_dyn_r_* 的 PC 单测与历史追溯。 */
 #define CALIB_S7_DYN_R_MIN_IQ_RATIO    (0.5f)
 #define CALIB_S7_DYN_R_LOW_RATIO       (0.5f)  /* 动态 R 候选窗口（基准=本次 S2 实测 R，FR-1.5 双源交叉） */
 #define CALIB_S7_DYN_R_HIGH_RATIO      (1.5f)
-/* FR-1.2：剔除建立段（转速/电流未稳不计入）；稳态样本分块做块均值，
- * 块均值数组再做截尾统计，内存 O(块数) 不随采样时长线性涨。 */
+/* FR-1.2：剔除建立段（转速/电流未稳不计入）。 */
 #define CALIB_S7_SETTLE_SKIP_MS        (500U)  /* 捕获开始后跳过的建立段，【待整定】 */
-#define CALIB_S7_STAT_BLOCK_MS         (80U)   /* 每块时长 */
-#define CALIB_S7_STAT_BLOCKS           (24U)   /* 块均值缓冲维度（(2500-500)/80=25 取 24） */
+#define CALIB_S7_STAT_BLOCK_MS         (80U)   /* 【旧判据遗留，见上注记】 */
+#define CALIB_S7_STAT_BLOCKS           (24U)   /* 【旧判据遗留，见上注记】 */
+
+/* ---- S7 判据 v2（2026-09-13 L4 结案：混叠实锤 + Vq/Iq 被 EMF 污染） ----
+ * 判据改为三道门：①行程/方向（不变）；②调节品质——建立段后全程窗均值
+ * wid/wiq 应贴目标（窗均值=tick 均值的 50ms 窗平均，天然滤掉 5ms 台阶激起
+ * 的 200Hz 振荡混叠）；③动态 R 改用 EMF-free 的 d 轴：vd=R*id-ωL*iq（交叉项
+ * ~0.01V 可忽略，EMF 只在 q 轴），取每窗 wvd/wid 比值的中位数对标 S2 静态 R，
+ * 抗离群（FR-1.2 精神）。均【待整定】。 */
+#define CALIB_S7_WINDOW_COUNT          (50U)   /* 2500ms/50ms 捕获窗数上限（判据用） */
+#define CALIB_S7_WRATIO_MIN_WINDOWS    (5U)    /* 参与判决的最少有效窗数 */
+#define CALIB_S7_WRATIO_MIN_WID_A      (0.02f) /* 窗 wid 低于此不产生比值（防除微小数） */
+#define CALIB_S7_REG_ID_BAND_A         (0.05f) /* 调节品质门：|mean(wid)-ID_TARGET|<=带 */
+#define CALIB_S7_REG_IQ_MIN_RATIO      (0.70f) /* 调节品质门：mean(wiq)>=RATIO*IQ_DRIVE */
 /* FR-1.3：S7 力矩方向矛盾判定——iq>0 驱动下机械位移应与 encoder_direction 同号，
  * 且必须有可测行程；行程阈值与方向判定阈值对齐 CALIB_DIR_MIN_MECH_DELTA_RAD。 */
 #define CALIB_S7_MIN_MECH_TRAVEL_RAD   (0.30f) /* 判"转子确实在转"的最小机械行程，【待整定】 */
@@ -188,7 +203,7 @@ extern "C" {
 #define CALIB_S7_LOS_IQ_ERR_A          (0.12f) /* |Iq目标-Iq实测| 跟踪误差门限，【待整定】 */
 #define CALIB_S7_LOS_VSAT_RATIO        (0.95f) /* |Vq| >= 电压限幅×该比例视为输出贴限，【待整定】 */
 #define CALIB_S7_LOS_HOLD_MS           (80U)   /* 双条件同时持续时长，抗单拍抖动，【待整定】 */
-#define CALIB_S7_DBG_PERIOD_MS         (50U)   /* S7 运行遥测打印周期 */
+#define CALIB_S7_DBG_PERIOD_MS         (100U)  /* S7 遥测+窗结算周期（2026-09-13 50->100ms：串口阻塞打印 ~9ms/行是新的角度过期源，降占空比 16%->8%；窗数 2.5s/100ms=25>=判据下限 5） */
 
 /* ============ S2 单次可信门补充（FR-1.5 第 1 级） ============ */
 #define CALIB_S2_VOFF_MAX_V            (0.10f) /* V-I 拟合截距（死区/管压降等效）上限，超出判本次 S2 不可信，【待整定】 */
@@ -203,6 +218,20 @@ extern "C" {
 #define CALIB_RLEARN_REPEAT_DEV_MAX    (0.10f)
 #define CALIB_RLEARN_CROSS_DEV_MAX     (0.25f)
 #define CALIB_RLEARN_GUARD_RATIO       (2.0f)
+
+/* ============ VJ 电压注入判决模式（L4 诊断工具，2026-09-13） ============
+ * 独立于 S0-S8 标定序列：静止/旋转下按命令注入单轴开环电压，读 (id,iq)
+ * 响应构成 2x2 矩阵 M，判决电流测量系与电压输出系的帧一致性（S7 失控 L4
+ * 挂账的定位实验）。不产生候选、绝不落盘；注入电流 ~0.3/R < 100mA。 */
+#define CALIB_VJ_INJECT_V              (0.30f) /* 单轴注入电压幅值（0.3/3.62Ω≈83mA），【待整定】 */
+#define CALIB_VJ_PULSE_MS              (200U)  /* 静止注入脉冲总长 */
+#define CALIB_VJ_PULSE_SKIP_MS         (100U)  /* 脉冲内跳过建立段后再累计均值，【待整定】 */
+#define CALIB_VJ_SWEEP_MS              (2500U) /* g 旋转扫描时长（对齐 S7 捕获窗） */
+#define CALIB_VJ_SWEEP_TLM_MS          (50U)   /* 扫描遥测打印周期 */
+/* 编码器门禁去抖：连续无效达此时长才判真故障；期间保持上一帧角度继续运行。
+ * 背景 2026-09-13 上板：使能瞬间栅驱 boost 瞬态干扰一次 I2C 读数（cache 单次
+ * 失败即 valid=0），零去抖门禁在上电第 1ms 误判 FAULT。 */
+#define CALIB_VJ_ENC_INVALID_FAULT_MS  (60U)
 
 #ifdef __cplusplus
 }
