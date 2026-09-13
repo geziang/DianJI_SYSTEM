@@ -33,14 +33,16 @@
 
 #define RUN_TLM_PERIOD_MS   (500U)  /* 使能态遥测周期（R3 正式设计再定频） */
 #define RUN_ENC_VALID_MS    (20U)   /* 编码器新鲜度门（同 PSEQ 判决口径） */
+#define RUN_IQ_LIMIT_A      (0.5f)  /* iq 指令限幅：守工程窗口 0.2-0.6A 上沿 */
 
 static app_run_state_t app_run_state = APP_RUN_STATE_BOOT;
 static foc_parameter_set_t app_run_parameters;
 static motor_parameter_package_t app_run_package;
 static uint8_t app_run_has_package = 0U;
-static uint32_t app_run_state_tick = 0U;
 static uint32_t app_run_tlm_ms = 0U;
+static float app_run_iq_target_a = 0.0f;
 static float app_run_last_mech_rad = 0.0f;
+static float app_run_mech_accum_rad = 0.0f;
 static uint8_t app_run_have_last_mech = 0U;
 static uint32_t app_run_hint_ms = 0U;
 
@@ -72,7 +74,6 @@ static void app_run_set_state(app_run_state_t next)
   if (app_run_state != next)
   {
     app_run_state = next;
-    app_run_state_tick = HAL_GetTick();
     app_run_logf("[HBT] state=RUN_%s", app_run_state_text(next));
   }
 }
@@ -233,10 +234,33 @@ static uint8_t app_run_enable(void)
     return 0U;
   }
   app_run_have_last_mech = 0U;
+  app_run_mech_accum_rad = 0.0f;
+  app_run_iq_target_a = 0.0f;
   app_run_tlm_ms = HAL_GetTick();
   debug_log_write_line("[RUN] enabled: zero-current hold (id=0 iq=0)");
   app_run_set_state(APP_RUN_STATE_ENABLED);
   return 1U;
+}
+
+/* FOC-4 第 2-5 步：iq 步进指令（工程窗口内大激励，id 恒 0）。 */
+static void app_run_iq_step(float delta_a)
+{
+  if (app_run_state != APP_RUN_STATE_ENABLED)
+  {
+    debug_log_write_line("[CMD] current command only while ENABLED");
+    return;
+  }
+  app_run_iq_target_a += delta_a;
+  if (app_run_iq_target_a > RUN_IQ_LIMIT_A)
+  {
+    app_run_iq_target_a = RUN_IQ_LIMIT_A;
+  }
+  if (app_run_iq_target_a < -RUN_IQ_LIMIT_A)
+  {
+    app_run_iq_target_a = -RUN_IQ_LIMIT_A;
+  }
+  foc_runtime_set_current_target(0.0f, app_run_iq_target_a);
+  app_run_logf("[CMD] target id=0.00A iq=%+.2fA", (double)app_run_iq_target_a);
 }
 
 static void app_run_handle_command(uint8_t command)
@@ -289,6 +313,26 @@ static void app_run_handle_command(uint8_t command)
     case 'I':
     case '?':
       baseline_diag_run_verbose_pipeline();
+      break;
+    case '+':
+    case '=':
+      app_run_iq_step(0.05f);
+      break;
+    case '-':
+    case '_':
+      app_run_iq_step(-0.05f);
+      break;
+    case '0':
+      if (app_run_state == APP_RUN_STATE_ENABLED)
+      {
+        app_run_iq_target_a = 0.0f;
+        foc_runtime_set_current_target(0.0f, 0.0f);
+        debug_log_write_line("[CMD] target id=0.00A iq=+0.00A");
+      }
+      else
+      {
+        debug_log_write_line("[CMD] current command only while ENABLED");
+      }
       break;
     default:
       break;
@@ -362,26 +406,33 @@ static void app_run_tick(uint32_t now_ms)
        * R3 正式实现改 ISR 内编码器连续出角。 */
       foc_runtime_set_forced_angle(rotor.electrical_angle_rad);
 
+      /* 转速：逐拍(1ms)累加圆周回绕位移再按遥测窗折算——500ms 直接差分
+       * 高速下混叠，且 wrap_signed 保证跨 2π 正确（修复 2026-09-13：
+       * 旧版 dt 用 state_tick 且不回绕，读数随时间缩小且跳变）。 */
+      mech_rad = foc_mechanical_raw_to_rad(enc->raw_angle);
+      if (app_run_have_last_mech != 0U)
+      {
+        app_run_mech_accum_rad +=
+            foc_angle_wrap_signed_rad(mech_rad - app_run_last_mech_rad);
+      }
+      app_run_last_mech_rad = mech_rad;
+      app_run_have_last_mech = 1U;
+
       if ((uint32_t)(now_ms - app_run_tlm_ms) >= RUN_TLM_PERIOD_MS)
       {
         float dt_s;
         float rpm;
 
+        dt_s = (float)(now_ms - app_run_tlm_ms) / 1000.0f; /* 先取 dt 再刷新时刻 */
         app_run_tlm_ms = now_ms;
         output = foc_runtime_get_last_output();
-        mech_rad = foc_mechanical_raw_to_rad(enc->raw_angle);
-        rpm = 0.0f;
-        if (app_run_have_last_mech != 0U)
-        {
-          dt_s = (float)(now_ms - app_run_state_tick) / 1000.0f;
-          rpm = (dt_s > 0.0f) ? ((mech_rad - app_run_last_mech_rad) / dt_s) *
-                                (60.0f / 6.28318530718f) : 0.0f;
-        }
-        app_run_last_mech_rad = mech_rad;
-        app_run_have_last_mech = 1U;
-        app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.1frpm",
+        rpm = (dt_s > 0.0f) ? (app_run_mech_accum_rad / dt_s) *
+                              (60.0f / 6.28318530718f) : 0.0f;
+        app_run_mech_accum_rad = 0.0f;
+        app_run_logf("[RUN] id=%.3fA iq=%.3fA iq*=%+.2fA n=%.0frpm",
                      (double)output->measured_current_a.d,
                      (double)output->measured_current_a.q,
+                     (double)app_run_iq_target_a,
                      (double)rpm);
       }
       break;
@@ -406,12 +457,11 @@ void app_run_init(void)
   debug_log_write_line("STM32F103C8T6 motor run " APP_RUN_VERSION);
   debug_log_write_line("build: " __DATE__ " " __TIME__);
   debug_log_write_line("safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot");
-  debug_log_write_line("cmds: p=enable(zero-current) x=stop c=clear(fault) i/?=diag");
+  debug_log_write_line("cmds: p=enable x=stop c=clear(fault) i/?=diag +/-=iq-step(0.05A) 0=zero-target");
 
   safety_manager_init();
   encoder_cache_init();
   foc_runtime_init();
-  app_run_state_tick = HAL_GetTick();
   debug_log_write_line("[RUN] boot; evaluating admission (package/ADC zero/encoder)");
 }
 
