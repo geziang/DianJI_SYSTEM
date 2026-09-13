@@ -97,7 +97,6 @@ app_run_state_t app_run_get_state(void)
 
 void app_run_load_package(const motor_parameter_package_t *package)
 {
-  motor_adc_current_diagnostic_t diagnostic;
   char line[160];
 
   if (package == (const motor_parameter_package_t *)0)
@@ -107,8 +106,31 @@ void app_run_load_package(const motor_parameter_package_t *package)
   app_run_package = *package;
   app_run_has_package = 1U;
 
-  /* 包在=该板测试固件已走完 S1a 符号绑定，方向验证置位联动 closed_loop 门。
-   * 零偏仍取本拍实测（同测试态 prepare 原则）。 */
+  /* 只存包副本；参数集构建在 BOOT→READY 准入点做——本函数运行于
+   * PARAMETER_CHECK 阶段，ADC_ZERO_REFRESH 尚未执行，此刻读零偏是
+   * 复位垃圾值（2026-09-13 上板实测：错误零偏→幻觉电流→电机带载鸣叫）。
+   * PI 直取包内标定值（ki 由固化时的生效 R 驱动，含 learned_R 链）。 */
+  (void)snprintf(line, sizeof(line),
+                 "[LOAD] run package (rev=%lu): R=%.3fohm L=%.2fuH offset=%+.4frad "
+                 "dir=%+d map=%u,%u,%u learned_R=%s",
+                 (unsigned long)app_run_package.parameter_revision,
+                 (double)app_run_package.phase_resistance_ohm,
+                 (double)(app_run_package.phase_inductance_h * 1e6f),
+                 (double)app_run_package.electrical_offset_rad,
+                 (int)app_run_package.encoder_direction,
+                 (unsigned)app_run_package.phase_map_a,
+                 (unsigned)app_run_package.phase_map_b,
+                 (unsigned)app_run_package.phase_map_c,
+                 (app_run_package.learned_r_valid != 0U) ? "yes" : "no");
+  debug_log_write_line(line);
+}
+
+/* 参数集构建：只在零偏已新鲜（准入点）时执行——零偏取当拍实测，
+ * 其余标量/PI/换相取包（map 按 DD-01 契约从包直取）。 */
+static uint8_t app_run_build_parameters(void)
+{
+  motor_adc_current_diagnostic_t diagnostic;
+
   motor_adc_get_current_diagnostic(&diagnostic);
   foc_parameter_set_load_default(&app_run_parameters);
   app_run_parameters.current.channel_u_zero_raw =
@@ -128,40 +150,17 @@ void app_run_load_package(const motor_parameter_package_t *package)
   app_run_parameters.rotor.encoder_direction = app_run_package.encoder_direction;
   app_run_parameters.rotor.electrical_offset_rad =
       app_run_package.electrical_offset_rad;
-  /* PI 直取包内标定值（ki 由固化时的生效 R 驱动，含 learned_R 链）。 */
   app_run_parameters.id_pi.kp = app_run_package.id_kp;
   app_run_parameters.id_pi.ki = app_run_package.id_ki;
   app_run_parameters.iq_pi.kp = app_run_package.iq_kp;
   app_run_parameters.iq_pi.ki = app_run_package.iq_ki;
-  /* DD-01 契约：运行态 phase_map 从固化包取，不经测试参数集。
-   * 注意 direction_verified 不在此处置位——本函数运行于 safety_manager
-   * PARAMETER_CHECK 阶段，随后的 ADC_ZERO_REFRESH 会 reset_diagnostic()
-   * 把它洗掉（2026-09-13 上板实测）；改在 BOOT→READY 准入通过时置位。 */
   app_run_parameters.phase_map.phase_a_output = app_run_package.phase_map_a;
   app_run_parameters.phase_map.phase_b_output = app_run_package.phase_map_b;
   app_run_parameters.phase_map.phase_c_output = app_run_package.phase_map_c;
 
-  (void)snprintf(line, sizeof(line),
-                 "[LOAD] run package (rev=%lu): R=%.3fohm L=%.2fuH offset=%+.4frad "
-                 "dir=%+d map=%u,%u,%u learned_R=%s",
-                 (unsigned long)app_run_package.parameter_revision,
-                 (double)app_run_package.phase_resistance_ohm,
-                 (double)(app_run_package.phase_inductance_h * 1e6f),
-                 (double)app_run_package.electrical_offset_rad,
-                 (int)app_run_package.encoder_direction,
-                 (unsigned)app_run_package.phase_map_a,
-                 (unsigned)app_run_package.phase_map_b,
-                 (unsigned)app_run_package.phase_map_c,
-                 (app_run_package.learned_r_valid != 0U) ? "yes" : "no");
-  debug_log_write_line(line);
-
-  if (foc_parameter_set_precompute(&app_run_parameters,
-                                   BOARD_CONFIG_CURRENT_LOOP_PERIOD_S) !=
-      FOC_STATUS_OK)
-  {
-    app_run_has_package = 0U;
-    debug_log_write_line("[FAULT] run parameter precompute failed");
-  }
+  return (uint8_t)(foc_parameter_set_precompute(&app_run_parameters,
+                                                BOARD_CONFIG_CURRENT_LOOP_PERIOD_S) ==
+                   FOC_STATUS_OK);
 }
 
 /* 使能：FR-3.2 准入门 + start_power 同序（cfg→sync→角度→目标→pwm→drv→rt）。 */
@@ -326,9 +325,16 @@ static void app_run_tick(uint32_t now_ms)
       {
         break;
       }
-      /* 零偏刷新已结束（quality 刚确认 OK），此刻置位才不会被洗掉；
-       * 包的存在=该板 S1a 已绑定符号（direction 证明）。 */
+      /* 零偏刷新已结束（quality 刚确认 OK）：此刻构建参数集（零偏取当拍
+       * 实测）并置 direction（包的存在=该板 S1a 已绑定符号）——两个标志
+       * 都不会被后续流程洗掉。 */
       motor_adc_set_direction_verified(1U);
+      if (app_run_build_parameters() == 0U)
+      {
+        debug_log_write_line("[FAULT] run parameter precompute failed");
+        app_run_set_state(APP_RUN_STATE_FAULT);
+        break;
+      }
       app_run_set_state(APP_RUN_STATE_READY);
       debug_log_write_line("[READY] p=enable (zero-current) x=stop i=diag");
       break;
