@@ -2564,7 +2564,9 @@ void control_loop_poll(void)
     {
       uint32_t dir_elapsed = (uint32_t)(now_ms - control_loop_dir_tick);
       const encoder_cache_sample_t *enc = encoder_cache_get_latest();
-      if (encoder_cache_is_valid(20U) == 0U)
+      /* 门禁放宽诊断姿态（2026-09-14）：20->50ms，配合编码器 5ms 轮询减负，
+       * 扛链路短暂翻车；硬件整修后收回 20ms。 */
+      if (encoder_cache_is_valid(50U) == 0U)
       {
         control_loop_enter_fault(CONTROL_LOOP_FAULT_ENCODER);
         break;

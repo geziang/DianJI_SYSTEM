@@ -35,7 +35,10 @@
 #define RUN_MAX_CURRENT_A   (1.0f)
 
 #define RUN_TLM_PERIOD_MS   (500U)  /* 使能态遥测周期（R3 正式设计再定频） */
-#define RUN_ENC_VALID_MS    (20U)   /* 编码器新鲜度门（同 PSEQ 判决口径） */
+#define RUN_ENC_VALID_MS    (50U)   /* 编码器新鲜度门：配合 5ms 轮询的诊断姿态放宽
+                                       （2026-09-14：原 20ms=连续 4 拍失败即判死，
+                                       放宽到 50ms≈10 拍，扛短暂翻车；真故障检出
+                                       也相应变慢 30ms，硬件整修后收回） */
 #define RUN_IQ_LIMIT_A      (0.5f)  /* iq 指令限幅：守工程窗口 0.2-0.6A 上沿 */
 
 /* ---- 速度环首版（SPEC-RUN FR-4.2/4.3/4.4；FR-4.5 阈值待整定回填） ---- */
