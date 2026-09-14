@@ -71,6 +71,9 @@ static float app_run_speed_cmd_rpm = 0.0f;    /* 斜坡后的实际指令 */
 static float app_run_speed_iq_ref = 0.0f;     /* 速度 PI 输出 */
 static uint32_t app_run_stall_ms = 0U;
 static uint32_t app_run_wrong_dir_ms = 0U;
+static uint8_t app_run_zero_retries = 0U;   /* BOOT 零偏自愈重试计数 */
+static uint32_t app_run_enc_revive_ms = 0U; /* BOOT 编码器无效起点/复活节流 */
+static uint8_t app_run_enc_revives = 0U;    /* I2C 总线复活尝试计数 */
 static uint32_t app_run_hint_ms = 0U;
 
 static void app_run_speed_pi_configure(void);
@@ -501,8 +504,8 @@ static void app_run_tick(uint32_t now_ms)
   switch (app_run_state)
   {
     case APP_RUN_STATE_BOOT:
-      /* 准入评估（FR-3.2 骨架）：包 + 零偏 + 编码器。safety_manager
-       * PARAMETER_CHECK 异步完成装载，此处逐拍等其结果。 */
+      /* 准入评估（FR-3.2 骨架）：包 + 零偏 + 编码器。等待必须可见、
+       * 可自愈、有上限（2026-09-13 上板教训：无声等待=只能靠猜）。 */
       if (app_run_has_package == 0U)
       {
         if (safety_manager_get_state() > SAFETY_MANAGER_STATE_PARAMETER_CHECK)
@@ -514,12 +517,50 @@ static void app_run_tick(uint32_t now_ms)
       motor_adc_get_current_diagnostic(&diagnostic);
       if (diagnostic.zero.quality != MOTOR_ADC_ZERO_QUALITY_OK)
       {
-        break; /* 等零偏刷新完成 */
+        /* 零偏自愈：安全链刷新已过而质量不 OK -> 每 2s 重校（功率关闭态，
+         * 安全无副作用），10 次不过转 FAULT。 */
+        if ((safety_manager_get_state() > SAFETY_MANAGER_STATE_ADC_ZERO_REFRESH) &&
+            ((uint32_t)(now_ms - app_run_hint_ms) >= 2000U))
+        {
+          app_run_hint_ms = now_ms;
+          (void)motor_adc_calibrate_zero_current();
+          app_run_zero_retries++;
+          app_run_logf("[RUN] waiting: zero quality not OK, retry %u/10",
+                       (unsigned)app_run_zero_retries);
+          if (app_run_zero_retries >= 10U)
+          {
+            debug_log_write_line("[FAULT] zero calibration failed after 10 retries; check ADC/supply noise");
+            app_run_set_state(APP_RUN_STATE_FAULT);
+          }
+        }
+        break;
       }
       if (encoder_cache_is_valid(RUN_ENC_VALID_MS) == 0U)
       {
+        /* 编码器自愈：无效满 2s 尝试 I2C 总线复活（DeInit/Init），
+         * 3 次不过转 FAULT（从机死锁拉 SDA 只能断电，明确提示）。 */
+        if (app_run_enc_revive_ms == 0U)
+        {
+          app_run_enc_revive_ms = now_ms;
+          debug_log_write_line("[RUN] waiting: encoder invalid");
+        }
+        else if ((uint32_t)(now_ms - app_run_enc_revive_ms) >= 2000U)
+        {
+          app_run_enc_revive_ms = now_ms;
+          app_run_enc_revives++;
+          encoder_cache_restart_bus();
+          app_run_logf("[RUN] waiting: encoder invalid, I2C revive %u/3",
+                       (unsigned)app_run_enc_revives);
+          if (app_run_enc_revives >= 3U)
+          {
+            debug_log_write_line("[FAULT] encoder bus dead; full power cycle required");
+            app_run_set_state(APP_RUN_STATE_FAULT);
+          }
+        }
         break;
       }
+      app_run_enc_revive_ms = 0U;
+      app_run_enc_revives = 0U;
       /* 零偏刷新已结束（quality 刚确认 OK）：此刻构建参数集（零偏取当拍
        * 实测）并置 direction（包的存在=该板 S1a 已绑定符号）——两个标志
        * 都不会被后续流程洗掉。 */
@@ -557,26 +598,28 @@ static void app_run_tick(uint32_t now_ms)
        * R3 正式实现改 ISR 内编码器连续出角。 */
       foc_runtime_set_forced_angle(rotor.electrical_angle_rad);
 
-      /* 速度估计（FR-4.1，16ms 滑窗回绕差分）+ 超速保护（FR-4.4，两模式通用） */
+      /* 速度估计（FR-4.1，16ms 滑窗回绕差分） */
       mech_rad = foc_mechanical_raw_to_rad(enc->raw_angle);
       speed_estimator_update(&app_run_speed_est, mech_rad, RUN_SPEED_TICK_S);
       mech_rpm = speed_estimator_get_rad_s(&app_run_speed_est, RUN_SPEED_TICK_S) *
                  RUN_RPS_TO_RPM;
-      if ((speed_estimator_valid(&app_run_speed_est) != 0U) &&
-          (fabsf(mech_rpm) > RUN_OVERSPEED_RPM))
-      {
-        app_run_safe_disable();
-        app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f)",
-                     (double)mech_rpm, (double)RUN_OVERSPEED_RPM);
-        app_run_set_state(APP_RUN_STATE_FAULT);
-        break;
-      }
 
       if (app_run_mode == APP_RUN_MODE_SPEED)
       {
         /* 目标斜坡（FR-4.3）：阶跃经 500rpm/s 爬坡，禁止直接反打。 */
         float step_rpm = RUN_SPEED_SLEW_RPM_S * RUN_SPEED_TICK_S;
         uint8_t est_ok = speed_estimator_valid(&app_run_speed_est);
+
+        /* 超速保护（FR-4.4）——速度模式专属：IQ 手动模式顶空载电压天花板
+         * （~455rpm@小电流）是正常物理，不该被拦（2026-09-13 上板教训）。 */
+        if ((est_ok != 0U) && (fabsf(mech_rpm) > RUN_OVERSPEED_RPM))
+        {
+          app_run_safe_disable();
+          app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f)",
+                       (double)mech_rpm, (double)RUN_OVERSPEED_RPM);
+          app_run_set_state(APP_RUN_STATE_FAULT);
+          break;
+        }
 
         if (app_run_speed_cmd_rpm < (app_run_speed_target_rpm - step_rpm))
         {

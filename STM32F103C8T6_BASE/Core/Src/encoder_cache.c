@@ -1,5 +1,6 @@
 #include "encoder_cache.h"
 
+#include "board_config.h"
 #include "main.h"
 #include "mt6701.h"
 
@@ -54,4 +55,14 @@ uint8_t encoder_cache_is_valid(uint32_t max_age_ms)
 {
   return (uint8_t)((encoder_cache_sample.valid != 0U) &&
                    ((uint32_t)(HAL_GetTick() - encoder_cache_sample.timestamp_ms) <= max_age_ms));
+}
+
+void encoder_cache_restart_bus(void)
+{
+  I2C_HandleTypeDef *i2c = board_config_get_encoder_i2c();
+
+  encoder_cache_sample.valid = 0U;
+  encoder_cache_sample.consecutive_failures = 0U;
+  (void)HAL_I2C_DeInit(i2c);
+  (void)HAL_I2C_Init(i2c);
 }
