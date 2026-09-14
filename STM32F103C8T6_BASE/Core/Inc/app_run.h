@@ -24,6 +24,7 @@ typedef enum
   APP_RUN_STATE_NEED_CAL,   /* 无有效固化包：需先烧测试固件标定 */
   APP_RUN_STATE_READY,      /* 准入通过，等 p=enable */
   APP_RUN_STATE_ENABLED,   /* 已使能：零流目标 + 编码器连续出角 */
+  APP_RUN_STATE_EXPERIMENT,/* 编码器 EMI 分段实验（e 命令，诊断工具） */
   APP_RUN_STATE_FAULT
 } app_run_state_t;
 

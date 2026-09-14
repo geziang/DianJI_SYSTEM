@@ -74,6 +74,9 @@ static uint32_t app_run_wrong_dir_ms = 0U;
 static uint8_t app_run_zero_retries = 0U;   /* BOOT 零偏自愈重试计数 */
 static uint32_t app_run_enc_revive_ms = 0U; /* BOOT 编码器无效起点/复活节流 */
 static uint8_t app_run_enc_revives = 0U;    /* I2C 总线复活尝试计数 */
+static uint8_t app_run_exp_stage = 0U;      /* EMI 实验：0=off 1..3=A/B/C */
+static uint32_t app_run_exp_ms = 0U;
+static uint32_t app_run_exp_bad_ms = 0U;
 static uint32_t app_run_hint_ms = 0U;
 
 static void app_run_speed_pi_configure(void);
@@ -118,6 +121,7 @@ const char *app_run_state_text(app_run_state_t state)
     case APP_RUN_STATE_NEED_CAL: return "NEED_CAL";
     case APP_RUN_STATE_READY: return "READY";
     case APP_RUN_STATE_ENABLED: return "ENABLED";
+    case APP_RUN_STATE_EXPERIMENT: return "EXPERIMENT";
     case APP_RUN_STATE_FAULT: return "FAULT";
     default: return "UNKNOWN";
   }
@@ -359,6 +363,38 @@ static void app_run_iq_step(float delta_a)
   app_run_logf("[CMD] target id=0.00A iq=%+.2fA", (double)app_run_iq_target_a);
 }
 
+/* ---- 编码器 EMI 分段实验（e 命令，2026-09-14 定凶工具） ----
+ * A: 驱动使能+PWM 静态低（无开关沿）→ 死=供电/地被栅驱拉塌
+ * B: PWM 50% 开关（无电流环）        → 死=开关沿共模串扰
+ * C: 完整零流闭环                    → 死=闭环相关（意外情况）
+ * 每段驻留 2s，编码器连续无效 300ms 判 LOST 即终止并开出处方。 */
+static void app_run_exp_end(void)
+{
+  app_run_exp_stage = 0U;
+  foc_runtime_stop();
+  app_run_safe_disable();
+  app_run_set_state(APP_RUN_STATE_READY);
+  debug_log_write_line("[EXP] end; power off");
+}
+
+static void app_run_exp_begin(void)
+{
+  if ((foc_runtime_configure(&app_run_parameters) != FOC_STATUS_OK) ||
+      (motor_pwm_start_test_output() != MOTOR_PWM_STATUS_OK) ||
+      (motor_drv_enable_for_test() != MOTOR_DRV_STATUS_OK))
+  {
+    app_run_safe_disable();
+    debug_log_write_line("[CMD] EMI test power-up failed");
+    return;
+  }
+  app_run_exp_stage = 1U;
+  app_run_exp_ms = HAL_GetTick();
+  app_run_exp_bad_ms = 0U;
+  app_run_set_state(APP_RUN_STATE_EXPERIMENT);
+  debug_log_write_line("[EXP] staged encoder-EMI experiment (2s/stage, x=abort)");
+  debug_log_write_line("[EXP] A: drv on, pwm static-low (no switching edges)");
+}
+
 static void app_run_handle_command(uint8_t command)
 {
   switch (command)
@@ -377,7 +413,12 @@ static void app_run_handle_command(uint8_t command)
       break;
     case 'x':
     case 'X':
-      if (app_run_state == APP_RUN_STATE_ENABLED)
+      if (app_run_state == APP_RUN_STATE_EXPERIMENT)
+      {
+        debug_log_write_line("[EXP] aborted");
+        app_run_exp_end();
+      }
+      else if (app_run_state == APP_RUN_STATE_ENABLED)
       {
         app_run_safe_disable();
         debug_log_write_line("[RUN] disabled");
@@ -409,6 +450,21 @@ static void app_run_handle_command(uint8_t command)
     case 'I':
     case '?':
       baseline_diag_run_verbose_pipeline();
+      break;
+    case 'e':
+    case 'E':
+      if (app_run_state != APP_RUN_STATE_READY)
+      {
+        debug_log_write_line("[CMD] EMI test from READY only");
+      }
+      else if (encoder_cache_is_valid(RUN_ENC_VALID_MS) == 0U)
+      {
+        debug_log_write_line("[CMD] EMI test needs encoder online (power off)");
+      }
+      else
+      {
+        app_run_exp_begin();
+      }
       break;
     case '+':
     case '=':
@@ -703,6 +759,97 @@ static void app_run_tick(uint32_t now_ms)
       }
       break;
 
+    case APP_RUN_STATE_EXPERIMENT:
+    {
+      const encoder_cache_sample_t *smp = encoder_cache_get_latest();
+      uint32_t stage_ms = (uint32_t)(now_ms - app_run_exp_ms);
+      uint8_t lost = 0U;
+
+      if (encoder_cache_is_valid(RUN_ENC_VALID_MS) == 0U)
+      {
+        app_run_exp_bad_ms++;
+        if (app_run_exp_bad_ms >= 300U)
+        {
+          lost = 1U;
+        }
+      }
+      else
+      {
+        app_run_exp_bad_ms = 0U;
+      }
+
+      if (lost != 0U)
+      {
+        app_run_logf("[EXP] stage %c LOST after %lums (fails=%u)",
+                     (int)('A' + (app_run_exp_stage - 1U)),
+                     (unsigned long)stage_ms,
+                     (unsigned)smp->consecutive_failures);
+        switch (app_run_exp_stage)
+        {
+          case 1U:
+            debug_log_write_line("[EXP] verdict A: supply/ground -- drv enable kills encoder; check 3.3V decoupling & GND return");
+            break;
+          case 2U:
+            debug_log_write_line("[EXP] verdict B: PWM switching-edge coupling -- reroute/shield encoder wires away from phase wires");
+            break;
+          default:
+            debug_log_write_line("[EXP] verdict C: closed-loop related (unexpected) -- capture [RUN] telemetry");
+            break;
+        }
+        app_run_exp_end();
+        break;
+      }
+
+      if (stage_ms >= 2000U)
+      {
+        app_run_logf("[EXP] stage %c OK (fails=%u)",
+                     (int)('A' + (app_run_exp_stage - 1U)),
+                     (unsigned)smp->consecutive_failures);
+        switch (app_run_exp_stage)
+        {
+          case 1U:
+            app_run_exp_stage = 2U;
+            app_run_exp_bad_ms = 0U;
+            app_run_exp_ms = now_ms;
+            /* 50% 占空比三相全开：线电压为 0（无电流），共模 dV/dt 拉满。 */
+            motor_pwm_set_raw(BOARD_CONFIG_PWM_PERIOD_TICKS / 2U,
+                              BOARD_CONFIG_PWM_PERIOD_TICKS / 2U,
+                              BOARD_CONFIG_PWM_PERIOD_TICKS / 2U);
+            debug_log_write_line("[EXP] B: pwm 50% switching (no current loop)");
+            break;
+          case 2U:
+          {
+            foc_rotor_sample_t rotor;
+            const encoder_cache_sample_t *enc2 = encoder_cache_get_latest();
+
+            app_run_exp_stage = 3U;
+            app_run_exp_bad_ms = 0U;
+            app_run_exp_ms = now_ms;
+            (void)foc_rotor_model_convert(&app_run_parameters.rotor,
+                                          enc2->raw_angle, &rotor);
+            foc_runtime_set_forced_angle(rotor.electrical_angle_rad);
+            foc_runtime_set_current_target(0.0f, 0.0f);
+            if ((motor_adc_start_synchronized() != MOTOR_ADC_STATUS_OK) ||
+                (foc_runtime_start() != FOC_STATUS_OK))
+            {
+              debug_log_write_line("[EXP] stage C start failed (gate)");
+              app_run_exp_end();
+            }
+            else
+            {
+              debug_log_write_line("[EXP] C: full zero-current loop");
+            }
+            break;
+          }
+          default:
+            debug_log_write_line("[EXP] all stages OK: encoder survived static enable chain; failure needs motion/speed condition");
+            app_run_exp_end();
+            break;
+        }
+      }
+      break;
+    }
+
     case APP_RUN_STATE_READY:
     case APP_RUN_STATE_FAULT:
     default:
@@ -723,7 +870,7 @@ void app_run_init(void)
   debug_log_write_line("STM32F103C8T6 motor run " APP_RUN_VERSION);
   debug_log_write_line("build: " __DATE__ " " __TIME__);
   debug_log_write_line("safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot");
-  debug_log_write_line("cmds: p=enable x=stop c=clear(fault) i/?=diag s=mode +/-=step 0=zero 1..4=speed-PI-gain");
+  debug_log_write_line("cmds: p=enable x=stop c=clear(fault) i/?=diag s=mode e=EMI-test +/-=step 0=zero 1..4=gain");
 
   safety_manager_init();
   encoder_cache_init();
