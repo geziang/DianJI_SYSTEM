@@ -1,0 +1,12 @@
+# ===== Keil MDK-ARM 编译输出目录（任意工程层级下，Objects/Listings 中间产物，可再生）=====
+**/MDK-ARM/STM32F103C8T6_BASE/
+
+# ===== Keil 本机界面状态、汇编列表、构建日志 =====
+*.uvguix.*
+**/MDK-ARM/*.lst
+**/MDK-ARM/*.log
+
+# ===== 本地工具/临时文件 =====
+.workbuddy/
+tmp_pdf_render/
+/tmp_speed_grep.txt

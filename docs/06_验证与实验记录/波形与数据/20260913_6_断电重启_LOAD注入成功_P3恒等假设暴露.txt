@@ -1,0 +1,38 @@
+STM32F103C8T6 identification test F103-identification-test-0.5-l4diag
+build: Sep 13 2026 18:06:05
+safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot
+cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) v=VJ-diag i/?=diag
+[ADC_ZERO] n=128 zero=802,1431 mad=4,3 p2p=38,33 quality=OK
+[TEST] automatic identification mode; power remains disabled
+[DIAG] begin static pipeline
+[BOOT] version=F103-identification-test-0.5-l4diag
+[BOOT] mode=FULL_STATIC_DIAG
+[BOOT] pwm_timer=TIM2 pwm_period=7199
+[BOOT] vbus_adc=unavailable
+[DRV] state=disabled PASS
+[PWM] ccr=0,0,0 PASS
+[ADC] u=796 v=1444 vbus=NA PASS
+[CUR] zero=802,1431 p2p=38,33 n=128 quality=OK state=CALIBRATION_REQUIRED
+[CUR] nominal=3300mV shunt=10mohm gain=50 V/A=500mV verified=1,0,0 closed_loop=0
+[ENC] device=MT6701 raw=11206 angle=246.22 field=unknown PASS
+[CTRL] state=TEST_BOOT PASS
+[DIAG] static pipeline result=PASS
+[TEST] S0 passed: zero + encoder ok; nominal R/L and PI loaded
+[LOAD] parameter package injected (page B rev=1): R=2.868ohm L=860.00uH offset=+1.3129rad dir=-1 phase_seq=1 learned_R=no(0.000 rev=0)
+[READY] S1a sign probe: p=start x=abort
+[HBT] state=POWER_ARMED
+[LIMIT] assumed_bus=10.0V max_voltage=5.50V max_current=1.00A
+[RUN] S1a sign probe started (openloop)
+[HBT] state=SIGN_CALIBRATION
+[P3] ang=0 dU=+189.8 dV=+175.2
+[P3] ang=1 dU=+165.6 dV=-325.2
+[P3] ang=2 dU=-327.4 dV=+156.5
+[P3] DIR U-peak@2 V-peak@1 ch=X amp=326.3code sign=-1/-1 -> NOT-BOUND
+[FAULT] P3 U/V channel cross (peak not at 0/120deg); CS wiring hardware mismatch
+[FAULT] output disabled; check hardware, then use c to retry
+[HBT] state=FAULT
+[CMD] power step rejected: wait for POWER_ARMED
+[CMD] power step rejected: wait for POWER_ARMED
+[CMD] power step rejected: wait for POWER_ARMED
+[CMD] power step rejected: wait for POWER_ARMED
+[CMD] power step rejected: wait for POWER_ARMED

@@ -1,0 +1,113 @@
+STM32F103C8T6 identification test F103-identification-test-0.5-l4diag
+build: Sep 13 2026 17:37:45
+safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot
+cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) v=VJ-diag i/?=diag
+[ADC_ZERO] n=128 zero=845,1481 mad=4,3 p2p=32,31 quality=OK
+[TEST] automatic identification mode; power remains disabled
+[DIAG] begin static pipeline
+[BOOT] version=F103-identification-test-0.5-l4diag
+[BOOT] mode=FULL_STATIC_DIAG
+[BOOT] pwm_timer=TIM2 pwm_period=7199
+[BOOT] vbus_adc=unavailable
+[DRV] state=disabled PASS
+[PWM] ccr=0,0,0 PASS
+[ADC] u=833 v=1469 vbus=NA PASS
+[CUR] zero=845,1481 p2p=32,31 n=128 quality=OK state=CALIBRATION_REQUIRED
+[CUR] nominal=3300mV shunt=10mohm gain=50 V/A=500mV verified=1,0,0 closed_loop=0
+[ENC] device=MT6701 raw=10074 angle=221.35 field=unknown PASS
+[CTRL] state=TEST_BOOT PASS
+[DIAG] static pipeline result=PASS
+[TEST] S0 passed: zero + encoder ok; nominal R/L and PI loaded
+[READY] S1a sign probe: p=start x=abort
+[HBT] state=POWER_ARMED
+[LIMIT] assumed_bus=10.0V max_voltage=5.50V max_current=1.00A
+[RUN] S1a sign probe started (openloop)
+[HBT] state=SIGN_CALIBRATION
+[P3] ang=0 dU=-371.8 dV=+150.3
+[P3] ang=1 dU=+154.3 dV=-329.5
+[P3] ang=2 dU=+159.9 dV=+169.4
+[P3] DIR U-peak@0 V-peak@1 ch=OK amp=350.6code sign=-1/-1 -> BINDABLE
+[POWER] disabled reason=S1_PROBE3_BOUND
+[RESULT] S1a sign_u=-1 sign_v=-1 bound (clean); press p for S1b closed-loop self-check
+[READY] S1b current self-check: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S1b current self-check started
+[HBT] state=SIGN_CALIBRATION
+[DBG] S1b ph=2 id=0.0306 iq=-0.0045 wm=0.0000 sp=0.0000 run=0 n=73 vd=0.2959 mode=0
+[RESULT] S1b closed-loop target=0.2000 id=0.2073A err=+0.0073A iq=0.0014A sp=0.0050A settled; feedback direction correct
+[POWER] disabled reason=S1_COMPLETE
+[READY] S2 resistance: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S2 resistance started
+[HBT] state=R_IDENTIFICATION
+[RESULT] S2 R=3.2669ohm Voff=0.0662V r2=0.9999
+[S2] trust gate: trusted=1 (|voff|=0.0662V limit=0.10V)
+[POWER] disabled reason=S2_R_COMPLETE
+[READY] S3 inductance: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S3 inductance started
+[HBT] state=L_IDENTIFICATION
+[RESULT] S3 L=0.00132938H iqr_ratio=1.203
+[WARN] S3 L estimate out of range, fallback nominal L=0.00086000H
+[POWER] disabled reason=S3_L_FALLBACK
+[READY] S4 current step: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S4 current step started
+[HBT] state=CURRENT_VALIDATE
+[DBG] S4 establish idle at FROM; awaiting step
+[DBG] S4 step issued -> TO 0.30A; observe clock started
+[RESULT] S4 settle=54.0ms steady_err=0.018% spread=1.790% exit=0.0%/run0 osc=0 sat=0
+[POWER] disabled reason=S4_CURRENT_VALIDATE_COMPLETE
+[GROUP] batch A (S1-S4 static electrical) complete; continuing to batch B (direction -> phase-seq -> S5 offset)
+[READY] ENCODER_DIR: rotate shaft CW by hand (>17 deg); p=confirm x=abort
+[HBT] state=POWER_ARMED
+[HBT] state=ENCODER_DIR_CALIBRATION
+[DIR] waiting CW rotation: delta=+0.000 rad / need 0.30 rad, 15s left
+[CMD] power step rejected: wait for POWER_ARMED
+[DIR] waiting CW rotation: delta=+0.000 rad / need 0.30 rad, 13s left
+[CMD] power step rejected: wait for POWER_ARMED
+[DIR] waiting CW rotation: delta=+0.000 rad / need 0.30 rad, 11s left
+[RESULT] ENCODER_DIR mech_delta=-0.3156 rad -> direction=-1
+[DIR] encoder_direction in RAM updated (this boot only)
+[READY] PHASE_SEQ: p=start x=abort
+[HBT] state=POWER_ARMED
+[HBT] state=PHASE_SEQ_CALIBRATION
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm0 a->0 b->1 c->2
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm1 a->0 b->2 c->1
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm2 a->1 b->0 c->2
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm3 a->1 b->2 c->0
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm4 a->2 b->0 c->1
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm5 a->2 b->1 c->0
+[RESULT] phase-seq best=4 pass=6 id=0.4800 iq=-0.0202 score=0.4598
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] verify perm4: align 0deg then hold +90deg, judge by encoder delta
+[PSEQ] verify dmech=+0.2228rad delec=-1.546rad (expect +1.571)
+[PSEQ] mirror corrected perm4 -> perm5 (delec=-1.546rad)
+[PSEQ] phase_map in RAM updated (this boot only; verified=1)
+[READY] S5 offset: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S5 offset started
+[HBT] state=SENSOR_CALIBRATION
+[RESULT] S5 offset=1.439448 std=0.0067 fwd_rev=0.0134 ok=1
+[RESULT] encoder_offset=1.439448rad
+[POWER] disabled reason=S5_OFFSET_COMPLETE
+[READY] S7 low-speed capture: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S7 low-speed capture started
+【S7DBG 段说明：本段约 49 行（50ms 周期、含 wid/wiq/wn 列），转存时未逐行保留。
+  逐字特征（被 0913 日志引用的可信统计）：瞬时 id 0.2433~0.4048、瞬时 iq −0.1239~+0.0926、
+  vd −0.290~+0.188、vq 1.13~1.45（窗均 vq̄≈1.22）；窗均 wid 稳定 0.096~0.113（≈目标 0.10）、
+  wiq 稳定 0.135~0.161（≈0.15）；wn≈16/窗。完整原文请以操作者串口工具记录补全。】
+[POWER] disabled reason=LOW_SPEED_CAPTURE_COMPLETE
+[RESULT] S7 regulation ok: mean wid=0.0988 wiq=0.1429 windows=40
+[CANDIDATE] dynamic R outside window; discarded: dyn_R=0.9876ohm windows=40 iqr=0.4979 window=[1.6334,4.9003] base_R=3.2669ohm
+[S7] dynamic R rejected; r=restart x=stop
+[HBT] state=CANDIDATE_REVIEW
+[CMD] power step rejected: wait for POWER_ARMED
+[CMD] power step rejected: wait for POWER_ARMED

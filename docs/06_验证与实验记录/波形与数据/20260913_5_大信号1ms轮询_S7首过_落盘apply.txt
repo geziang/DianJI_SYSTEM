@@ -1,0 +1,153 @@
+STM32F103C8T6 identification test F103-identification-test-0.5-l4diag
+build: Sep 13 2026 18:06:05
+safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot
+cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) v=VJ-diag i/?=diag
+[ADC_ZERO] n=128 zero=806,1442 mad=5,4 p2p=51,28 quality=OK
+[TEST] automatic identification mode; power remains disabled
+[DIAG] begin static pipeline
+[BOOT] version=F103-identification-test-0.5-l4diag
+[BOOT] mode=FULL_STATIC_DIAG
+[BOOT] pwm_timer=TIM2 pwm_period=7199
+[BOOT] vbus_adc=unavailable
+[DRV] state=disabled PASS
+[PWM] ccr=0,0,0 PASS
+[ADC] u=795 v=1451 vbus=NA PASS
+[CUR] zero=806,1442 p2p=51,28 n=128 quality=OK state=CALIBRATION_REQUIRED
+[CUR] nominal=3300mV shunt=10mohm gain=50 V/A=500mV verified=1,0,0 closed_loop=0
+[ENC] device=MT6701 raw=9647 angle=211.97 field=unknown PASS
+[CTRL] state=TEST_BOOT PASS
+[DIAG] static pipeline result=PASS
+[TEST] S0 passed: zero + encoder ok; nominal R/L and PI loaded
+[READY] S1a sign probe: p=start x=abort
+[HBT] state=POWER_ARMED
+[LIMIT] assumed_bus=10.0V max_voltage=5.50V max_current=1.00A
+[RUN] S1a sign probe started (openloop)
+[HBT] state=SIGN_CALIBRATION
+[P3] ang=0 dU=-320.4 dV=+145.7
+[P3] ang=1 dU=+164.1 dV=-322.3
+[P3] ang=2 dU=+193.0 dV=+177.9
+[P3] DIR U-peak@0 V-peak@1 ch=OK amp=321.4code sign=-1/-1 -> BINDABLE
+[POWER] disabled reason=S1_PROBE3_BOUND
+[RESULT] S1a sign_u=-1 sign_v=-1 bound (clean); press p for S1b closed-loop self-check
+[READY] S1b current self-check: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S1b current self-check started
+[HBT] state=SIGN_CALIBRATION
+[DBG] S1b ph=2 id=0.0943 iq=-0.0033 wm=0.0000 sp=0.0000 run=0 n=73 vd=0.7098 mode=0
+[RESULT] S1b closed-loop target=0.5000 id=0.4996A err=-0.0004A iq=0.0064A sp=0.0077A settled; feedback direction correct
+[POWER] disabled reason=S1_COMPLETE
+[READY] S2 resistance: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S2 resistance started
+[HBT] state=R_IDENTIFICATION
+[RESULT] S2 R=3.5032ohm Voff=0.0164V r2=1.0000
+[S2] trust gate: trusted=1 (|voff|=0.0164V limit=0.10V)
+[POWER] disabled reason=S2_R_COMPLETE
+[READY] S3 inductance: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S3 inductance started
+[HBT] state=L_IDENTIFICATION
+[RESULT] S3 L=0.00066422H iqr_ratio=1.740
+[WARN] S3 L estimate out of range, fallback nominal L=0.00086000H
+[POWER] disabled reason=S3_L_FALLBACK
+[READY] S4 current step: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S4 current step started
+[HBT] state=CURRENT_VALIDATE
+[DBG] S4 establish idle at FROM; awaiting step
+[DBG] S4 step issued -> TO 0.30A; observe clock started
+[RESULT] S4 settle=60.0ms steady_err=0.114% spread=1.619% exit=0.0%/run0 osc=0 sat=0
+[POWER] disabled reason=S4_CURRENT_VALIDATE_COMPLETE
+[GROUP] batch A (S1-S4 static electrical) complete; continuing to batch B (direction -> phase-seq -> S5 offset)
+[READY] ENCODER_DIR: rotate shaft CW by hand (>17 deg); p=confirm x=abort
+[HBT] state=POWER_ARMED
+[HBT] state=ENCODER_DIR_CALIBRATION
+[DIR] waiting CW rotation: delta=+0.000 rad / need 0.30 rad, 15s left
+[CMD] power step rejected: wait for POWER_ARMED
+[DIR] waiting CW rotation: delta=+0.000 rad / need 0.30 rad, 13s left
+[CMD] power step rejected: wait for POWER_ARMED
+[DIR] waiting CW rotation: delta=-0.143 rad / need 0.30 rad, 11s left
+[RESULT] ENCODER_DIR mech_delta=-0.3148 rad -> direction=-1
+[DIR] encoder_direction in RAM updated (this boot only)
+[READY] PHASE_SEQ: p=start x=abort
+[HBT] state=POWER_ARMED
+[HBT] state=PHASE_SEQ_CALIBRATION
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm0 a->0 b->1 c->2
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm1 a->0 b->2 c->1
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm2 a->1 b->0 c->2
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm3 a->1 b->2 c->0
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm4 a->2 b->0 c->1
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm5 a->2 b->1 c->0
+[RESULT] phase-seq best=4 pass=6 id=0.4774 iq=-0.0199 score=0.4575
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] verify perm4: align 0deg then hold +90deg, judge by encoder delta
+[PSEQ] verify dmech=+0.2209rad delec=-1.546rad (expect +1.571)
+[PSEQ] mirror corrected perm4 -> perm5 (delec=-1.546rad)
+[PSEQ] phase_map in RAM updated (this boot only; verified=1)
+[READY] S5 offset: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S5 offset started
+[HBT] state=SENSOR_CALIBRATION
+[RESULT] S5 offset=1.312896 std=0.0113 fwd_rev=0.0226 ok=1
+[RESULT] encoder_offset=1.312896rad
+[POWER] disabled reason=S5_OFFSET_COMPLETE
+[READY] S7 low-speed capture: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S7 low-speed capture started
+[S7DBG] t=101ms id=0.5894 iq=0.0267 vd=1.040 vq=2.064 wid=0.0000 wiq=0.0000 wn=0
+[HBT] state=LOW_SPEED_CAPTURE
+[S7DBG] t=201ms id=0.6024 iq=-0.0471 vd=1.016 vq=1.812 wid=0.0000 wiq=0.0000 wn=0
+[S7DBG] t=302ms id=0.5959 iq=0.0474 vd=1.073 vq=1.924 wid=0.0000 wiq=0.0000 wn=0
+[S7DBG] t=404ms id=0.6116 iq=-0.0637 vd=0.993 vq=1.921 wid=0.0000 wiq=0.0000 wn=0
+[S7DBG] t=505ms id=0.5172 iq=0.1024 vd=1.057 vq=1.955 wid=0.3641 wiq=0.3082 wn=2
+[S7DBG] t=606ms id=0.4716 iq=0.0879 vd=1.001 vq=2.081 wid=0.4081 wiq=0.2755 wn=28
+[S7DBG] t=706ms id=0.5799 iq=-0.0515 vd=1.004 vq=1.824 wid=0.4084 wiq=0.2959 wn=25
+[S7DBG] t=806ms id=0.5387 iq=0.1162 vd=1.108 vq=1.910 wid=0.3962 wiq=0.2868 wn=26
+[S7DBG] t=907ms id=0.5665 iq=-0.0179 vd=0.987 vq=1.972 wid=0.4091 wiq=0.2772 wn=27
+[S7DBG] t=1010ms id=0.5307 iq=-0.0028 vd=0.997 vq=1.818 wid=0.4062 wiq=0.2930 wn=25
+[S7DBG] t=1111ms id=0.5885 iq=0.0526 vd=1.036 vq=1.972 wid=0.4006 wiq=0.2842 wn=27
+[S7DBG] t=1214ms id=0.5481 iq=0.0397 vd=1.098 vq=1.905 wid=0.3970 wiq=0.2858 wn=26
+[S7DBG] t=1317ms id=0.4892 iq=-0.0306 vd=1.014 vq=1.862 wid=0.4095 wiq=0.2829 wn=26
+[S7DBG] t=1418ms id=0.5128 iq=0.0325 vd=0.931 vq=2.010 wid=0.4086 wiq=0.2827 wn=28
+[S7DBG] t=1518ms id=0.4725 iq=0.1117 vd=1.099 vq=1.923 wid=0.3970 wiq=0.2923 wn=24
+[S7DBG] t=1619ms id=0.4622 iq=0.0343 vd=0.991 vq=1.913 wid=0.4118 wiq=0.2810 wn=27
+[S7DBG] t=1719ms id=0.5732 iq=0.0530 vd=1.058 vq=1.822 wid=0.4001 wiq=0.2931 wn=26
+[S7DBG] t=1819ms id=0.5257 iq=0.0074 vd=1.060 vq=1.855 wid=0.4000 wiq=0.2850 wn=24
+[S7DBG] t=1920ms id=0.6300 iq=-0.1239 vd=0.989 vq=1.927 wid=0.4036 wiq=0.2877 wn=26
+[S7DBG] t=2022ms id=0.5037 iq=0.1141 vd=1.080 vq=1.870 wid=0.3929 wiq=0.2920 wn=26
+[S7DBG] t=2122ms id=0.4774 iq=0.0510 vd=1.020 vq=1.828 wid=0.4079 wiq=0.2803 wn=26
+[S7DBG] t=2222ms id=0.6545 iq=-0.0874 vd=0.967 vq=1.961 wid=0.4044 wiq=0.2835 wn=27
+[S7DBG] t=2322ms id=0.5523 iq=-0.0522 vd=1.025 vq=1.920 wid=0.3979 wiq=0.2896 wn=24
+[S7DBG] t=2422ms id=0.6206 iq=-0.0871 vd=1.012 vq=1.870 wid=0.4060 wiq=0.2877 wn=25
+[POWER] disabled reason=LOW_SPEED_CAPTURE_COMPLETE
+[RESULT] S7 regulation ok: mean wid=0.4015 wiq=0.2872 windows=20
+[RLEARN] flags=0x05 history=1 learned=no rev=0
+[RESULT] dynamic_R_daxis=2.868217ohm windows=20 iqr=0.0679 window=[1.7516,5.2548]
+[NEXT] a=apply (flash) r=repeat d=discard x=stop
+[HBT] state=CANDIDATE_REVIEW
+[CMD] power step rejected: wait for POWER_ARMED
+[CMD] power step rejected: wait for POWER_ARMED
+---------- 按 a 之后 ----------
+[S7DBG] t=2022ms id=0.5037 iq=0.1141 vd=1.080 vq=1.870 wid=0.3929 wiq=0.2920 wn=26
+[S7DBG] t=2122ms id=0.4774 iq=0.0510 vd=1.020 vq=1.828 wid=0.4079 wiq=0.2803 wn=26
+[S7DBG] t=2222ms id=0.6545 iq=-0.0874 vd=0.967 vq=1.961 wid=0.4044 wiq=0.2835 wn=27
+[S7DBG] t=2322ms id=0.5523 iq=-0.0522 vd=1.025 vq=1.920 wid=0.3979 wiq=0.2896 wn=24
+[S7DBG] t=2422ms id=0.6206 iq=-0.0871 vd=1.012 vq=1.870 wid=0.4060 wiq=0.2877 wn=25
+[POWER] disabled reason=LOW_SPEED_CAPTURE_COMPLETE
+[RESULT] S7 regulation ok: mean wid=0.4015 wiq=0.2872 windows=20
+[RLEARN] flags=0x05 history=1 learned=no rev=0
+[RESULT] dynamic_R_daxis=2.868217ohm windows=20 iqr=0.0679 window=[1.7516,5.2548]
+[NEXT] a=apply (flash) r=repeat d=discard x=stop
+[HBT] state=CANDIDATE_REVIEW
+[CMD] power step rejected: wait for POWER_ARMED
+[CMD] power step rejected: wait for POWER_ARMED
+[APPLY] committed to flash (source page B); rev=1
+[CMD] candidate apply accepted
+[HBT] state=TEST_READY
+[CMD] apply rejected: no approved candidate

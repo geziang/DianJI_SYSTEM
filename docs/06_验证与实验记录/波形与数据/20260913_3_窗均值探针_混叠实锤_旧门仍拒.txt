@@ -1,0 +1,177 @@
+STM32F103C8T6 identification test F103-identification-test-0.5-l4diag
+build: Sep 13 2026 17:19:39
+safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot
+cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) v=VJ-diag i/?=diag
+[ADC_ZERO] n=128 zero=841,1473 mad=4,4 p2p=32,31 quality=OK
+[TEST] automatic identification mode; power remains disabled
+[DIAG] begin static pipeline
+[BOOT] version=F103-identification-test-0.5-l4diag
+[BOOT] mode=FULL_STATIC_DIAG
+[BOOT] pwm_timer=TIM2 pwm_period=7199
+[BOOT] vbus_adc=unavailable
+[DRV] state=disabled PASS
+[PWM] ccr=0,0,0 PASS
+[ADC] u=833 v=1469 vbus=NA PASS
+[CUR] zero=841,1473 p2p=32,31 n=128 quality=OK state=CALIBRATION_REQUIRED
+[CUR] nominal=3300mV shunt=10mohm gain=50 V/A=500mV verified=1,0,0 closed_loop=0
+[ENC] device=MT6701 raw=10657 angle=234.16 field=unknown PASS
+[CTRL] state=TEST_BOOT PASS
+[DIAG] static pipeline result=PASS
+[TEST] S0 passed: zero + encoder ok; nominal R/L and PI loaded
+[READY] S1a sign probe: p=start x=abort
+[HBT] state=POWER_ARMED
+STM32F103C8T6 identification test F103-identification-test-0.5-l4diag
+build: Sep 13 2026 17:19:39
+safety: V3P supply <=10V (12V PROHIBITED); motor output disabled at boot
+cmds: p=confirm r=restart a=apply d=discard x=stop c=clear(fault|storage) v=VJ-diag i/?=diag
+[ADC_ZERO] n=128 zero=841,1473 mad=4,3 p2p=32,31 quality=OK
+[TEST] automatic identification mode; power remains disabled
+[DIAG] begin static pipeline
+[BOOT] version=F103-identification-test-0.5-l4diag
+[BOOT] mode=FULL_STATIC_DIAG
+[BOOT] pwm_timer=TIM2 pwm_period=7199
+[BOOT] vbus_adc=unavailable
+[DRV] state=disabled PASS
+[PWM] ccr=0,0,0 PASS
+[ADC] u=833 v=1469 vbus=NA PASS
+[CUR] zero=841,1473 p2p=32,31 n=128 quality=OK state=CALIBRATION_REQUIRED
+[CUR] nominal=3300mV shunt=10mohm gain=50 V/A=500mV verified=1,0,0 closed_loop=0
+[ENC] device=MT6701 raw=10657 angle=234.16 field=unknown PASS
+[CTRL] state=TEST_BOOT PASS
+[DIAG] static pipeline result=PASS
+[TEST] S0 passed: zero + encoder ok; nominal R/L and PI loaded
+[READY] S1a sign probe: p=start x=abort
+[HBT] state=POWER_ARMED
+[LIMIT] assumed_bus=10.0V max_voltage=5.50V max_current=1.00A
+[RUN] S1a sign probe started (openloop)
+[HBT] state=SIGN_CALIBRATION
+[P3] ang=0 dU=-363.5 dV=+146.5
+[P3] ang=1 dU=+151.8 dV=-313.6
+[P3] ang=2 dU=+192.8 dV=+171.6
+[P3] DIR U-peak@0 V-peak@1 ch=OK amp=338.5code sign=-1/-1 -> BINDABLE
+[POWER] disabled reason=S1_PROBE3_BOUND
+[RESULT] S1a sign_u=-1 sign_v=-1 bound (clean); press p for S1b closed-loop self-check
+[READY] S1b current self-check: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S1b current self-check started
+[HBT] state=SIGN_CALIBRATION
+[DBG] S1b ph=2 id=0.0173 iq=-0.0200 wm=0.0000 sp=0.0000 run=0 n=73 vd=0.3238 mode=0
+[RESULT] S1b closed-loop target=0.2000 id=0.2017A err=+0.0017A iq=0.0086A sp=0.0087A settled; feedback direction correct
+[POWER] disabled reason=S1_COMPLETE
+[READY] S2 resistance: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S2 resistance started
+[HBT] state=R_IDENTIFICATION
+[RESULT] S2 R=3.4815ohm Voff=0.0428V r2=0.9995
+[S2] trust gate: trusted=1 (|voff|=0.0428V limit=0.10V)
+[POWER] disabled reason=S2_R_COMPLETE
+[READY] S3 inductance: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S3 inductance started
+[HBT] state=L_IDENTIFICATION
+[RESULT] S3 L=0.00110215H iqr_ratio=0.859
+[WARN] S3 L estimate out of range, fallback nominal L=0.00086000H
+[POWER] disabled reason=S3_L_FALLBACK
+[READY] S4 current step: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S4 current step started
+[HBT] state=CURRENT_VALIDATE
+[DBG] S4 establish idle at FROM; awaiting step
+[DBG] S4 step issued -> TO 0.30A; observe clock started
+[RESULT] S4 settle=53.0ms steady_err=0.172% spread=1.699% exit=0.0%/run0 osc=0 sat=0
+[POWER] disabled reason=S4_CURRENT_VALIDATE_COMPLETE
+[GROUP] batch A (S1-S4 static electrical) complete; continuing to batch B (direction -> phase-seq -> S5 offset)
+[READY] ENCODER_DIR: rotate shaft CW by hand (>17 deg); p=confirm x=abort
+[HBT] state=POWER_ARMED
+[HBT] state=ENCODER_DIR_CALIBRATION
+[DIR] waiting CW rotation: delta=+0.000 rad / need 0.30 rad, 15s left
+[DIR] waiting CW rotation: delta=+0.000 rad / need 0.30 rad, 13s left
+[RESULT] ENCODER_DIR mech_delta=-0.3110 rad -> direction=-1
+[DIR] encoder_direction in RAM updated (this boot only)
+[READY] PHASE_SEQ: p=start x=abort
+[HBT] state=POWER_ARMED
+[HBT] state=PHASE_SEQ_CALIBRATION
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm0 a->0 b->1 c->2
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm1 a->0 b->2 c->1
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm2 a->1 b->0 c->2
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm3 a->1 b->2 c->0
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm4 a->2 b->0 c->1
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] perm5 a->2 b->1 c->0
+[RESULT] phase-seq best=4 pass=6 id=0.4830 iq=-0.0246 score=0.4585
+[RUN] PHASE_SEQ started (openloop)
+[PSEQ] verify perm4: align 0deg then hold +90deg, judge by encoder delta
+[PSEQ] verify dmech=+0.2255rad delec=-1.560rad (expect +1.571)
+[PSEQ] mirror corrected perm4 -> perm5 (delec=-1.560rad)
+[PSEQ] phase_map in RAM updated (this boot only; verified=1)
+[READY] S5 offset: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S5 offset started
+[HBT] state=SENSOR_CALIBRATION
+[RESULT] S5 offset=1.230636 std=0.0054 fwd_rev=0.0107 ok=1
+[RESULT] encoder_offset=1.230636rad
+[POWER] disabled reason=S5_OFFSET_COMPLETE
+[READY] S7 low-speed capture: p=start x=abort
+[HBT] state=POWER_ARMED
+[RUN] S7 low-speed capture started
+[S7DBG] t=51ms id=0.2792 iq=0.0422 vd=0.171 vq=1.126 wid=0.0854 wiq=0.0878 wn=21
+[HBT] state=LOW_SPEED_CAPTURE
+[S7DBG] t=101ms id=0.2930 iq=0.0564 vd=0.093 vq=1.106 wid=0.1004 wiq=0.1471 wn=14
+[S7DBG] t=152ms id=0.1544 iq=0.1355 vd=0.017 vq=1.110 wid=0.1015 wiq=0.1446 wn=16
+[S7DBG] t=202ms id=0.0878 iq=0.0920 vd=-0.034 vq=1.110 wid=0.0956 wiq=0.1537 wn=16
+[S7DBG] t=252ms id=0.0737 iq=0.1069 vd=-0.000 vq=1.139 wid=0.0963 wiq=0.1585 wn=16
+[S7DBG] t=303ms id=0.0729 iq=0.0875 vd=0.034 vq=1.194 wid=0.0992 wiq=0.1541 wn=16
+[S7DBG] t=353ms id=0.0097 iq=0.1618 vd=0.024 vq=1.232 wid=0.1044 wiq=0.1496 wn=16
+[S7DBG] t=403ms id=0.0516 iq=0.1948 vd=0.048 vq=1.211 wid=0.1059 wiq=0.1511 wn=16
+[S7DBG] t=453ms id=0.0901 iq=0.2079 vd=0.053 vq=1.195 wid=0.1075 wiq=0.1462 wn=16
+[S7DBG] t=503ms id=0.1315 iq=0.2281 vd=0.069 vq=1.140 wid=0.1012 wiq=0.1473 wn=16
+[S7DBG] t=553ms id=0.1375 iq=0.1694 vd=0.076 vq=1.087 wid=0.0971 wiq=0.1455 wn=16
+[S7DBG] t=603ms id=0.1289 iq=0.1289 vd=0.000 vq=1.128 wid=0.0992 wiq=0.1428 wn=16
+[S7DBG] t=653ms id=0.0571 iq=0.1179 vd=-0.021 vq=1.234 wid=0.0958 wiq=0.1436 wn=16
+[S7DBG] t=704ms id=0.1269 iq=0.1649 vd=0.023 vq=1.189 wid=0.0996 wiq=0.1537 wn=16
+[S7DBG] t=754ms id=0.0537 iq=0.1507 vd=0.014 vq=1.206 wid=0.1057 wiq=0.1525 wn=16
+[S7DBG] t=804ms id=0.0525 iq=0.1630 vd=0.040 vq=1.208 wid=0.1044 wiq=0.1526 wn=16
+[S7DBG] t=854ms id=0.0435 iq=0.1963 vd=0.057 vq=1.175 wid=0.1069 wiq=0.1534 wn=16
+[S7DBG] t=904ms id=0.0807 iq=0.2125 vd=0.056 vq=1.203 wid=0.1111 wiq=0.1451 wn=16
+[S7DBG] t=954ms id=0.0945 iq=0.1926 vd=0.073 vq=1.213 wid=0.1042 wiq=0.1410 wn=16
+[S7DBG] t=1004ms id=0.1317 iq=0.1413 vd=0.046 vq=1.107 wid=0.0979 wiq=0.1476 wn=16
+[S7DBG] t=1054ms id=0.1189 iq=0.1095 vd=-0.019 vq=1.124 wid=0.0955 wiq=0.1514 wn=16
+[S7DBG] t=1105ms id=0.0641 iq=0.0929 vd=0.011 vq=1.147 wid=0.0960 wiq=0.1580 wn=16
+[S7DBG] t=1155ms id=0.0637 iq=0.1227 vd=-0.042 vq=1.186 wid=0.1074 wiq=0.1603 wn=16
+[S7DBG] t=1206ms id=0.0734 iq=0.1310 vd=0.031 vq=1.151 wid=0.1022 wiq=0.1607 wn=16
+[S7DBG] t=1257ms id=0.0432 iq=0.1153 vd=0.038 vq=1.210 wid=0.1048 wiq=0.1498 wn=16
+[S7DBG] t=1307ms id=0.0469 iq=0.1873 vd=0.052 vq=1.252 wid=0.1069 wiq=0.1509 wn=16
+[S7DBG] t=1357ms id=0.0807 iq=0.2334 vd=0.070 vq=1.182 wid=0.1075 wiq=0.1498 wn=16
+[S7DBG] t=1408ms id=0.1069 iq=0.2362 vd=0.112 vq=1.124 wid=0.1020 wiq=0.1434 wn=16
+[S7DBG] t=1459ms id=0.1447 iq=0.2019 vd=0.111 vq=1.086 wid=0.0973 wiq=0.1433 wn=16
+[S7DBG] t=1509ms id=0.1550 iq=0.1572 vd=0.108 vq=1.071 wid=0.0944 wiq=0.1471 wn=16
+[S7DBG] t=1559ms id=0.1275 iq=0.1075 vd=-0.003 vq=1.123 wid=0.0989 wiq=0.1444 wn=16
+[S7DBG] t=1609ms id=0.0536 iq=0.0877 vd=-0.020 vq=1.271 wid=0.0914 wiq=0.1432 wn=16
+[S7DBG] t=1660ms id=0.0394 iq=0.1033 vd=0.015 vq=1.188 wid=0.1042 wiq=0.1602 wn=16
+[S7DBG] t=1711ms id=0.0355 iq=0.1237 vd=0.012 vq=1.195 wid=0.1105 wiq=0.1552 wn=16
+[S7DBG] t=1762ms id=0.0452 iq=0.1281 vd=0.034 vq=1.191 wid=0.1087 wiq=0.1586 wn=16
+[S7DBG] t=1812ms id=0.0090 iq=0.1221 vd=0.017 vq=1.189 wid=0.1128 wiq=0.1572 wn=16
+[S7DBG] t=1863ms id=0.0401 iq=0.1487 vd=0.045 vq=1.228 wid=0.1080 wiq=0.1481 wn=16
+[S7DBG] t=1913ms id=0.0415 iq=0.2325 vd=0.077 vq=1.236 wid=0.1077 wiq=0.1502 wn=16
+[S7DBG] t=1963ms id=0.1097 iq=0.2265 vd=0.046 vq=1.199 wid=0.1080 wiq=0.1456 wn=16
+[S7DBG] t=2013ms id=0.1609 iq=0.1535 vd=0.036 vq=1.073 wid=0.0964 wiq=0.1499 wn=16
+[S7DBG] t=2064ms id=0.1214 iq=0.0950 vd=-0.020 vq=1.109 wid=0.0948 wiq=0.1484 wn=16
+[S7DBG] t=2115ms id=0.1121 iq=0.0701 vd=0.006 vq=1.107 wid=0.0950 wiq=0.1608 wn=16
+[S7DBG] t=2165ms id=0.0917 iq=0.0779 vd=0.012 vq=1.146 wid=0.1027 wiq=0.1614 wn=16
+[S7DBG] t=2215ms id=0.0581 iq=0.1361 vd=0.027 vq=1.221 wid=0.1017 wiq=0.1518 wn=16
+[S7DBG] t=2265ms id=0.0630 iq=0.1961 vd=0.030 vq=1.214 wid=0.1049 wiq=0.1522 wn=16
+[S7DBG] t=2315ms id=0.0730 iq=0.2189 vd=0.071 vq=1.201 wid=0.1048 wiq=0.1471 wn=16
+[S7DBG] t=2365ms id=0.1240 iq=0.2187 vd=0.083 vq=1.137 wid=0.1027 wiq=0.1433 wn=16
+[S7DBG] t=2415ms id=0.0853 iq=0.1682 vd=0.073 vq=1.072 wid=0.0985 wiq=0.1482 wn=16
+[S7DBG] t=2465ms id=0.1333 iq=0.1367 vd=0.041 vq=1.047 wid=0.0929 wiq=0.1522 wn=16
+[POWER] disabled reason=LOW_SPEED_CAPTURE_COMPLETE
+[CANDIDATE] dynamic R outside window; discarded: dyn_R=6.9204ohm blocks=3 samples=222 window=[1.7407,5.2222] base_R=3.4815ohm
+[S7] dynamic R rejected; r=restart x=stop
+[HBT] state=CANDIDATE_REVIEW
+[CMD] power step rejected: wait for POWER_ARMED
+[CMD] power step rejected: wait for POWER_ARMED
