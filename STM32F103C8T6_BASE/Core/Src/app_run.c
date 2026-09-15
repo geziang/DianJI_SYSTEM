@@ -66,6 +66,10 @@
 #define RUN_SIGN_IQ_MIN_A      (0.05f)  /* 符号门：判"转矩显著"的下限 */
 #define RUN_SIGN_N_MIN_RPM     (80.0f)  /* 符号门：判"转速显著"的下限 */
 #define RUN_SIGN_BAD_MS        (300U)   /* 符号矛盾持续此时长=谎言定谳（慢谎言唯一判据） */
+#define RUN_IQ_SPEED_SIGN      (-1.0f)  /* 本机标定约定（dir=-1 链，历史 IQ 阶梯铁证）：
+                                           正 iq 产生负 n——符号门/超速门的"转矩可解释"
+                                           判定必须乘此系数（2026-09-15 上板纠错：曾按
+                                           通用物理假设正 iq→正 n，冤判方向正确的读数） */
 
 typedef enum
 {
@@ -735,12 +739,11 @@ static void app_run_tick(uint32_t now_ms)
           break;
         }
 
-        /* 符号一致性门（物理因果：持续正转矩必有正转速；台面无外力拖动）。
-         * 慢谎言（经 100ms 窗稀释、骗过跳变门）的唯一真理判据：iq 显著、
-         * n 显著、方向矛盾，持续 300ms = 谎言定谳。 */
+        /* 符号一致性门（按本机约定：正 iq→负 n，见 RUN_IQ_SPEED_SIGN）：
+         * iq 显著、n 显著、且方向与本机转矩-转速约定矛盾，持续 300ms=谎言。 */
         {
           uint8_t torque_explains =
-              ((app_run_speed_iq_ref * n_fb) > 0.0f) &&
+              ((app_run_speed_iq_ref * n_fb * RUN_IQ_SPEED_SIGN) > 0.0f) &&
               (fabsf(app_run_speed_iq_ref) >= RUN_SIGN_IQ_MIN_A);
           if ((app_run_speed_suspect == 0U) &&
               (fabsf(app_run_speed_iq_ref) >= RUN_SIGN_IQ_MIN_A) &&
@@ -759,9 +762,10 @@ static void app_run_tick(uint32_t now_ms)
           if (app_run_sign_bad_ms >= RUN_SIGN_BAD_MS)
           {
             app_run_safe_disable();
-            app_run_logf("[FAULT] feedback lying: iq_ref=%+.2fA vs n=%.0frpm (torque/speed sign contradicts %lums)",
+            app_run_logf("[FAULT] feedback lying: iq_ref=%+.2fA vs n=%.0frpm (opposite of machine convention %+.0f, %lums)",
                          (double)app_run_speed_iq_ref,
                          (double)n_fb,
+                         (double)RUN_IQ_SPEED_SIGN,
                          (unsigned long)app_run_sign_bad_ms);
             app_run_set_state(APP_RUN_STATE_FAULT);
             break;
