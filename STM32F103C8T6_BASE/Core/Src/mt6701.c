@@ -13,7 +13,7 @@
 #include <stddef.h>
 
 #define MT6701_I2C_ADDRESS_8BIT              (MT6701_DEFAULT_ADDRESS_7BIT << 1)
-#define MT6701_I2C_TIMEOUT_MS                (20U)
+#define MT6701_I2C_TIMEOUT_MS                (2U)
 
 #define MT6701_REG_ANGLE_HIGH                (0x03U)
 #define MT6701_REG_ANGLE_LOW                 (0x04U)

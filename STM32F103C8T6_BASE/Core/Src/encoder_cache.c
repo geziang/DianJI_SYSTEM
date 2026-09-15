@@ -14,6 +14,7 @@
 
 static encoder_cache_sample_t encoder_cache_sample;
 static uint32_t encoder_cache_last_poll_ms;
+static uint8_t encoder_cache_have_good; /* 收到过至少一个好样本（区分 boot 期 age=0 假活） */
 
 void encoder_cache_init(void)
 {
@@ -22,6 +23,7 @@ void encoder_cache_init(void)
   encoder_cache_sample.consecutive_failures = 0U;
   encoder_cache_sample.valid = 0U;
   encoder_cache_last_poll_ms = 0U;
+  encoder_cache_have_good = 0U;
 }
 
 void encoder_cache_poll(void)
@@ -41,6 +43,7 @@ void encoder_cache_poll(void)
     encoder_cache_sample.timestamp_ms = now;
     encoder_cache_sample.consecutive_failures = 0U;
     encoder_cache_sample.valid = 1U;
+    encoder_cache_have_good = 1U;
   }
   else
   {
@@ -56,7 +59,10 @@ const encoder_cache_sample_t *encoder_cache_get_latest(void)
 
 uint8_t encoder_cache_is_valid(uint32_t max_age_ms)
 {
-  return (uint8_t)((encoder_cache_sample.valid != 0U) &&
+  /* 真正的时间窗语义：距上一个好样本 <= max_age 即活——孤立坏读
+   * （含三读一致性拒收）被容忍，持续断供才判死。旧实现查瞬时 valid
+   * 标志，单次失败即假死（2026-09-15 上板实锤）。 */
+  return (uint8_t)((encoder_cache_have_good != 0U) &&
                    ((uint32_t)(HAL_GetTick() - encoder_cache_sample.timestamp_ms) <= max_age_ms));
 }
 
