@@ -59,6 +59,9 @@
  * 也不追假），反馈回落到冻结值邻域自动恢复；可疑持续超时受控停机。 */
 #define RUN_N_JUMP_LIMIT_RPM   (100.0f) /* 距冻结值跳变上限（物理 48 的 2 倍余量） */
 #define RUN_N_SUSPECT_STOP_MS  (200U)   /* 可疑持续上限：受控停机（区别于 overspeed 跳闸） */
+#define RUN_IQ_REF_DEADBAND_A  (0.03f)  /* iq_ref 小死区：近零目标不产生差分开关激励 */
+#define RUN_IQ_REF_LP_ALPHA    (0.05f)  /* iq_ref 一阶低通（τ≈20ms@1ms 拍）：掐断
+                                           "PI 微抖→开关噪声→假反馈→更大抖"自激环 */
 
 typedef enum
 {
@@ -93,6 +96,7 @@ static float app_run_speed_frozen_rpm = 0.0f; /* 反馈合理性门：冻结可�
 static uint8_t app_run_speed_have_frozen = 0U;
 static uint8_t app_run_speed_suspect = 0U;    /* 反馈可疑标志（PI/保护均吃冻结值） */
 static uint32_t app_run_speed_suspect_ms = 0U;
+static float app_run_iq_ref_filt = 0.0f;      /* iq_ref 低通+死区输出（防自激环） */
 static uint32_t app_run_hint_ms = 0U;
 
 static void app_run_speed_pi_configure(void);
@@ -294,6 +298,7 @@ static uint8_t app_run_enable(void)
   app_run_speed_have_frozen = 0U;
   app_run_speed_suspect = 0U;
   app_run_speed_suspect_ms = 0U;
+  app_run_iq_ref_filt = 0.0f;
   app_run_stall_ms = 0U;
   app_run_wrong_dir_ms = 0U;
   app_run_overspeed_ms = 0U;
@@ -758,8 +763,17 @@ static void app_run_tick(uint32_t now_ms)
 
         if (est_ok != 0U)
         {
-          app_run_speed_iq_ref =
-              foc_pi_update(&app_run_speed_pi, app_run_speed_cmd_rpm - n_fb);
+          float iq_raw = foc_pi_update(&app_run_speed_pi,
+                                       app_run_speed_cmd_rpm - n_fb);
+          /* 低通 + 小死区：PI 微抖不产生差分开关激励（自激环起点），
+           * 近零输出直接归零（空载摩擦极小，0.03A 死区无稳态影响）。 */
+          app_run_iq_ref_filt +=
+              RUN_IQ_REF_LP_ALPHA * (iq_raw - app_run_iq_ref_filt);
+          if (fabsf(app_run_iq_ref_filt) < RUN_IQ_REF_DEADBAND_A)
+          {
+            app_run_iq_ref_filt = 0.0f;
+          }
+          app_run_speed_iq_ref = app_run_iq_ref_filt;
           foc_runtime_set_current_target(0.0f, app_run_speed_iq_ref);
         }
 
