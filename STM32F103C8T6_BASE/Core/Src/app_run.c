@@ -63,6 +63,9 @@
 #define RUN_IQ_REF_DEADBAND_A  (0.03f)  /* iq_ref 小死区：近零目标不产生差分开关激励 */
 #define RUN_IQ_REF_LP_ALPHA    (0.05f)  /* iq_ref 一阶低通（τ≈20ms@1ms 拍）：掐断
                                            "PI 微抖→开关噪声→假反馈→更大抖"自激环 */
+#define RUN_SIGN_IQ_MIN_A      (0.05f)  /* 符号门：判"转矩显著"的下限 */
+#define RUN_SIGN_N_MIN_RPM     (80.0f)  /* 符号门：判"转速显著"的下限 */
+#define RUN_SIGN_BAD_MS        (300U)   /* 符号矛盾持续此时长=谎言定谳（慢谎言唯一判据） */
 
 typedef enum
 {
@@ -98,6 +101,7 @@ static uint8_t app_run_speed_have_frozen = 0U;
 static uint8_t app_run_speed_suspect = 0U;    /* 反馈可疑标志（PI/保护均吃冻结值） */
 static uint32_t app_run_speed_suspect_ms = 0U;
 static float app_run_iq_ref_filt = 0.0f;      /* iq_ref 低通+死区输出（防自激环） */
+static uint16_t app_run_sign_bad_ms = 0U;     /* 符号矛盾累计（iq 与 n 反号） */
 static uint32_t app_run_hint_ms = 0U;
 
 static void app_run_speed_pi_configure(void);
@@ -300,6 +304,7 @@ static uint8_t app_run_enable(void)
   app_run_speed_suspect = 0U;
   app_run_speed_suspect_ms = 0U;
   app_run_iq_ref_filt = 0.0f;
+  app_run_sign_bad_ms = 0U;
   app_run_stall_ms = 0U;
   app_run_wrong_dir_ms = 0U;
   app_run_overspeed_ms = 0U;
@@ -720,33 +725,74 @@ static void app_run_tick(uint32_t now_ms)
         if (app_run_speed_suspect_ms >= RUN_N_SUSPECT_STOP_MS)
         {
           app_run_safe_disable();
-          app_run_logf("[FAULT] speed feedback unreliable (suspect %lums, frozen %.0frpm)",
+          app_run_logf("[FAULT] feedback unreliable (suspect %lums) | n=%.0f frozen=%.0f n_cmd=%.0f iq_ref=%+.2f",
                        (unsigned long)app_run_speed_suspect_ms,
-                       (double)app_run_speed_frozen_rpm);
+                       (double)mech_rpm,
+                       (double)app_run_speed_frozen_rpm,
+                       (double)app_run_speed_cmd_rpm,
+                       (double)app_run_speed_iq_ref);
           app_run_set_state(APP_RUN_STATE_FAULT);
           break;
         }
 
-        /* 超速保护（FR-4.4）——速度模式专属且仅吃可信反馈；去抖 20ms。 */
-        if ((est_ok != 0U) && (app_run_speed_suspect == 0U) &&
-            (fabsf(n_fb) > RUN_OVERSPEED_RPM))
+        /* 符号一致性门（物理因果：持续正转矩必有正转速；台面无外力拖动）。
+         * 慢谎言（经 100ms 窗稀释、骗过跳变门）的唯一真理判据：iq 显著、
+         * n 显著、方向矛盾，持续 300ms = 谎言定谳。 */
         {
-          if (app_run_overspeed_ms < 60000U)
+          uint8_t torque_explains =
+              ((app_run_speed_iq_ref * n_fb) > 0.0f) &&
+              (fabsf(app_run_speed_iq_ref) >= RUN_SIGN_IQ_MIN_A);
+          if ((app_run_speed_suspect == 0U) &&
+              (fabsf(app_run_speed_iq_ref) >= RUN_SIGN_IQ_MIN_A) &&
+              (fabsf(n_fb) > RUN_SIGN_N_MIN_RPM) &&
+              (torque_explains == 0U))
           {
-            app_run_overspeed_ms++;
+            if (app_run_sign_bad_ms < 60000U)
+            {
+              app_run_sign_bad_ms++;
+            }
           }
-        }
-        else
-        {
-          app_run_overspeed_ms = 0U;
-        }
-        if (app_run_overspeed_ms >= 20U)
-        {
-          app_run_safe_disable();
-          app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f, sustained 20ms)",
-                       (double)n_fb, (double)RUN_OVERSPEED_RPM);
-          app_run_set_state(APP_RUN_STATE_FAULT);
-          break;
+          else
+          {
+            app_run_sign_bad_ms = 0U;
+          }
+          if (app_run_sign_bad_ms >= RUN_SIGN_BAD_MS)
+          {
+            app_run_safe_disable();
+            app_run_logf("[FAULT] feedback lying: iq_ref=%+.2fA vs n=%.0frpm (torque/speed sign contradicts %lums)",
+                         (double)app_run_speed_iq_ref,
+                         (double)n_fb,
+                         (unsigned long)app_run_sign_bad_ms);
+            app_run_set_state(APP_RUN_STATE_FAULT);
+            break;
+          }
+
+          /* 超速保护（FR-4.4）——仅当"转矩能解释该转速"（同号且显著）才计
+           * 去抖：本台面唯一能驱动电机的是我们自己的转矩，反号/无转矩的
+           * "超速"必是谎言（归符号门/合理性门管），不再误跳 overspeed。 */
+          if ((est_ok != 0U) && (app_run_speed_suspect == 0U) &&
+              (torque_explains != 0U) &&
+              (fabsf(n_fb) > RUN_OVERSPEED_RPM))
+          {
+            if (app_run_overspeed_ms < 60000U)
+            {
+              app_run_overspeed_ms++;
+            }
+          }
+          else
+          {
+            app_run_overspeed_ms = 0U;
+          }
+          if (app_run_overspeed_ms >= 20U)
+          {
+            app_run_safe_disable();
+            app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f, 20ms) | n_cmd=%.0f iq_ref=%+.2f",
+                         (double)n_fb, (double)RUN_OVERSPEED_RPM,
+                         (double)app_run_speed_cmd_rpm,
+                         (double)app_run_speed_iq_ref);
+            app_run_set_state(APP_RUN_STATE_FAULT);
+            break;
+          }
         }
 
         if (app_run_speed_cmd_rpm < (app_run_speed_target_rpm - step_rpm))
