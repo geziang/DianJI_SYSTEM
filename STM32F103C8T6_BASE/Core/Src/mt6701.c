@@ -100,7 +100,9 @@ mt6701_status_t mt6701_is_connected(void)
 mt6701_status_t mt6701_read_raw_angle(uint16_t *angle_raw)
 {
   uint8_t angle_high;
+  uint8_t angle_high2;
   uint8_t angle_low;
+  uint8_t diff;
   mt6701_status_t status;
 
   if (angle_raw == NULL)
@@ -108,6 +110,11 @@ mt6701_status_t mt6701_read_raw_angle(uint16_t *angle_raw)
     return MT6701_STATUS_INVALID_ARG;
   }
 
+  /* 高-低-高三读一致性：一个样本拆两个 I2C 事务存在撕裂/位错窗口
+   * （HAL OK ≠ 数据对，MT6701 I2C 无校验和；2026-09-15 上板实锤：
+   * 静止电机被读出持续 -2000rpm = 成段垃圾数据流经速度环引发 overspeed
+   * 误跳并驱动 PI 输出虚假转矩指令）。两个高字节不一致（±1 LSB 容差
+   * 防真实转动的边界抖动）则整拍作废。 */
   status = mt6701_read_byte(MT6701_REG_ANGLE_HIGH, &angle_high);
   if (status != MT6701_STATUS_OK)
   {
@@ -120,7 +127,19 @@ mt6701_status_t mt6701_read_raw_angle(uint16_t *angle_raw)
     return status;
   }
 
-  *angle_raw = (uint16_t)((((uint16_t)angle_high) << 6) |
+  status = mt6701_read_byte(MT6701_REG_ANGLE_HIGH, &angle_high2);
+  if (status != MT6701_STATUS_OK)
+  {
+    return status;
+  }
+
+  diff = (uint8_t)(angle_high - angle_high2);
+  if ((diff > 1U) && (diff < 255U))
+  {
+    return MT6701_STATUS_I2C_RX_ERROR; /* 撕裂/位错样本：按坏读处理 */
+  }
+  /* 一致时取第二次高字节（更接近低字节时刻）。 */
+  *angle_raw = (uint16_t)((((uint16_t)angle_high2) << 6) |
                           (((uint16_t)angle_low) >> MT6701_REG_ANGLE_LOW_POS));
   *angle_raw &= MT6701_RAW_MASK_14BIT;
 
