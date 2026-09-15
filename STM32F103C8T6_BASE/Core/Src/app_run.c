@@ -42,9 +42,9 @@
 #define RUN_IQ_LIMIT_A      (0.5f)  /* iq 指令限幅：守工程窗口 0.2-0.6A 上沿 */
 
 /* ---- 速度环首版（SPEC-RUN FR-4.2/4.3/4.4；FR-4.5 阈值待整定回填） ---- */
-#define RUN_SPEED_LIMIT_RPM    (300.0f) /* 目标限幅：避开 400rpm 电压饱和与编码器高速掉线区 */
+#define RUN_SPEED_LIMIT_RPM    (450.0f) /* 目标限幅 450rpm（owner 2026-09-15 放宽）：10V 母线空载天花板 ~550rpm 内留整定空间 */
 #define RUN_SPEED_SLEW_RPM_S   (500.0f) /* 目标斜坡（FR-4.3 加速度限首版值） */
-#define RUN_OVERSPEED_RPM      (450.0f) /* 超速保护（FR-4.4） */
+#define RUN_OVERSPEED_RPM      (580.0f) /* 超速保护（FR-4.4）：580rpm=物理天花板(~550)+余量 */
 #define RUN_SPEED_KP_INIT      (0.0025f) /* A/rpm：保守起步（owner 2026-09-15 拍板从 0.005 减半——
                                           * 电流阶跃越小开关噪声越小，编码器说谎概率下降；1 键往上走） */
 #define RUN_SPEED_KI_INIT      (0.0125f) /* A/(rpm·s)，随 kp 同比减半 */
