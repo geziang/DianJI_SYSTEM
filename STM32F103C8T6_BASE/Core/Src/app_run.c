@@ -45,8 +45,9 @@
 #define RUN_SPEED_LIMIT_RPM    (300.0f) /* 目标限幅：避开 400rpm 电压饱和与编码器高速掉线区 */
 #define RUN_SPEED_SLEW_RPM_S   (500.0f) /* 目标斜坡（FR-4.3 加速度限首版值） */
 #define RUN_OVERSPEED_RPM      (450.0f) /* 超速保护（FR-4.4） */
-#define RUN_SPEED_KP_INIT      (0.005f) /* A/rpm：按 ~2000rpm/A 开环增益与 0.5A 饱和估，待整定 */
-#define RUN_SPEED_KI_INIT      (0.025f) /* A/(rpm·s)，待整定 */
+#define RUN_SPEED_KP_INIT      (0.0025f) /* A/rpm：保守起步（owner 2026-09-15 拍板从 0.005 减半——
+                                          * 电流阶跃越小开关噪声越小，编码器说谎概率下降；1 键往上走） */
+#define RUN_SPEED_KI_INIT      (0.0125f) /* A/(rpm·s)，随 kp 同比减半 */
 #define RUN_SPEED_STEP_RPM     (20.0f)
 #define RUN_SPEED_TICK_S       (0.001f) /* 速度外环拍周期=主循环 1ms */
 #define RUN_RPS_TO_RPM         (9.5493f)
