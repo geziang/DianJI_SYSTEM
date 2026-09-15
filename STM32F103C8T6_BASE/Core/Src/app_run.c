@@ -765,15 +765,15 @@ static void app_run_tick(uint32_t now_ms)
         {
           float iq_raw = foc_pi_update(&app_run_speed_pi,
                                        app_run_speed_cmd_rpm - n_fb);
-          /* 低通 + 小死区：PI 微抖不产生差分开关激励（自激环起点），
-           * 近零输出直接归零（空载摩擦极小，0.03A 死区无稳态影响）。 */
+          /* 低通状态永不清零；死区只作用于输出副本——死区清滤波状态会把
+           * 单步增量(α×满幅=0.025A)永远压在死区(0.03A)以下，输出被钉死
+           * 在零（2026-09-15 上板实锤：目标 300rpm 电机不动）。 */
           app_run_iq_ref_filt +=
               RUN_IQ_REF_LP_ALPHA * (iq_raw - app_run_iq_ref_filt);
-          if (fabsf(app_run_iq_ref_filt) < RUN_IQ_REF_DEADBAND_A)
-          {
-            app_run_iq_ref_filt = 0.0f;
-          }
-          app_run_speed_iq_ref = app_run_iq_ref_filt;
+          app_run_speed_iq_ref =
+              (fabsf(app_run_iq_ref_filt) < RUN_IQ_REF_DEADBAND_A)
+                  ? 0.0f
+                  : app_run_iq_ref_filt;
           foc_runtime_set_current_target(0.0f, app_run_speed_iq_ref);
         }
 
