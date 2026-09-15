@@ -792,10 +792,11 @@ static void app_run_tick(uint32_t now_ms)
           if (app_run_overspeed_ms >= 20U)
           {
             app_run_safe_disable();
-            app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f, 20ms) | n_cmd=%.0f iq_ref=%+.2f",
+            app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f, 20ms) | n_cmd=%.0f iq_ref=%+.2f fab=%u",
                          (double)n_fb, (double)RUN_OVERSPEED_RPM,
                          (double)app_run_speed_cmd_rpm,
-                         (double)app_run_speed_iq_ref);
+                         (double)app_run_speed_iq_ref,
+                         (unsigned)encoder_cache_get_latest()->field_abnormal_count);
             app_run_set_state(APP_RUN_STATE_FAULT);
             break;
           }
@@ -904,11 +905,12 @@ static void app_run_tick(uint32_t now_ms)
           }
           else
           {
-            app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.0f n*=%.0frpm",
+            app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.0f n*=%.0frpm fab=%u",
                          (double)output->measured_current_a.d,
                          (double)output->measured_current_a.q,
                          (double)mech_rpm,
-                         (double)app_run_speed_cmd_rpm);
+                         (double)app_run_speed_cmd_rpm,
+                         (unsigned)encoder_cache_get_latest()->field_abnormal_count);
           }
         }
         else
