@@ -28,6 +28,9 @@
 #define MT6701_REG_DIR_MASK                  (0x01U << MT6701_REG_DIR_POS)
 #define MT6701_REG_ZERO_HIGH_MASK            (0x0FU << MT6701_REG_ZERO_HIGH_POS)
 
+/* 最近一次成功读角捕获的磁场状态位（ANGLE_LOW bit[1:0]，见头文件探针说明）。 */
+static uint8_t mt6701_last_field_status = 0U;
+
 static mt6701_status_t mt6701_select_register(uint8_t reg)
 {
   uint8_t data;
@@ -138,12 +141,19 @@ mt6701_status_t mt6701_read_raw_angle(uint16_t *angle_raw)
   {
     return MT6701_STATUS_I2C_RX_ERROR; /* 撕裂/位错样本：按坏读处理 */
   }
+  /* 磁场状态探针：ANGLE_LOW bit[1:0]（01=正常）——此前被 >>2 丢弃。 */
+  mt6701_last_field_status = (uint8_t)(angle_low & MT6701_FIELD_STATUS_MASK);
   /* 一致时取第二次高字节（更接近低字节时刻）。 */
   *angle_raw = (uint16_t)((((uint16_t)angle_high2) << 6) |
                           (((uint16_t)angle_low) >> MT6701_REG_ANGLE_LOW_POS));
   *angle_raw &= MT6701_RAW_MASK_14BIT;
 
   return MT6701_STATUS_OK;
+}
+
+uint8_t mt6701_get_last_field_status(void)
+{
+  return mt6701_last_field_status;
 }
 
 mt6701_status_t mt6701_read_angle_degrees_x100(uint16_t *angle_degrees_x100)

@@ -13,6 +13,7 @@ typedef struct
   uint32_t timestamp_ms;
   uint16_t consecutive_failures;
   uint8_t valid;
+  uint16_t field_abnormal_count; /* 磁场状态≠正常的成功读次数（探针，见 mt6701.h） */
 } encoder_cache_sample_t;
 
 void encoder_cache_init(void);

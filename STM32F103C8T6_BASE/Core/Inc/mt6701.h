@@ -60,6 +60,14 @@ typedef struct
 
 mt6701_status_t mt6701_is_connected(void);
 mt6701_status_t mt6701_read_raw_angle(uint16_t *angle_raw);
+
+/* ---- 磁场状态探针（2026-09-15 欠流说谎案诊断）----
+ * ANGLE_LOW 寄存器 bit[1:0] 是芯片自报的磁场状态：01=正常、10=过弱、
+ * 11=过强（00 未定义）。read_raw_angle 每次顺带捕获（此前被 >>2 丢弃）。
+ * 若"说谎"发生时状态≠01 → 芯片前端自证看到异常磁场 = 磁耦合机制实锤。 */
+#define MT6701_FIELD_STATUS_MASK    (0x03U)
+#define MT6701_FIELD_STATUS_NORMAL  (0x01U)
+uint8_t mt6701_get_last_field_status(void);
 mt6701_status_t mt6701_read_angle_degrees_x100(uint16_t *angle_degrees_x100);
 mt6701_status_t mt6701_read_snapshot(mt6701_snapshot_t *snapshot);
 

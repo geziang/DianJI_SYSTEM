@@ -24,6 +24,7 @@ void encoder_cache_init(void)
   encoder_cache_sample.valid = 0U;
   encoder_cache_last_poll_ms = 0U;
   encoder_cache_have_good = 0U;
+  encoder_cache_sample.field_abnormal_count = 0U;
 }
 
 void encoder_cache_poll(void)
@@ -44,6 +45,13 @@ void encoder_cache_poll(void)
     encoder_cache_sample.consecutive_failures = 0U;
     encoder_cache_sample.valid = 1U;
     encoder_cache_have_good = 1U;
+    /* 磁场状态探针：成功读但芯片自报磁场异常 → 计数（欠流说谎案：若
+     * 该计数与谎言时段相关，磁耦合机制实锤）。 */
+    if ((mt6701_get_last_field_status() != MT6701_FIELD_STATUS_NORMAL) &&
+        (encoder_cache_sample.field_abnormal_count < 0xFFFFU))
+    {
+      encoder_cache_sample.field_abnormal_count++;
+    }
   }
   else
   {

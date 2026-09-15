@@ -729,12 +729,13 @@ static void app_run_tick(uint32_t now_ms)
         if (app_run_speed_suspect_ms >= RUN_N_SUSPECT_STOP_MS)
         {
           app_run_safe_disable();
-          app_run_logf("[FAULT] feedback unreliable (suspect %lums) | n=%.0f frozen=%.0f n_cmd=%.0f iq_ref=%+.2f",
+          app_run_logf("[FAULT] feedback unreliable (suspect %lums) | n=%.0f frozen=%.0f n_cmd=%.0f iq_ref=%+.2f fab=%u",
                        (unsigned long)app_run_speed_suspect_ms,
                        (double)mech_rpm,
                        (double)app_run_speed_frozen_rpm,
                        (double)app_run_speed_cmd_rpm,
-                       (double)app_run_speed_iq_ref);
+                       (double)app_run_speed_iq_ref,
+                       (unsigned)encoder_cache_get_latest()->field_abnormal_count);
           app_run_set_state(APP_RUN_STATE_FAULT);
           break;
         }
@@ -762,11 +763,12 @@ static void app_run_tick(uint32_t now_ms)
           if (app_run_sign_bad_ms >= RUN_SIGN_BAD_MS)
           {
             app_run_safe_disable();
-            app_run_logf("[FAULT] feedback lying: iq_ref=%+.2fA vs n=%.0frpm (opposite of machine convention %+.0f, %lums)",
+            app_run_logf("[FAULT] feedback lying: iq_ref=%+.2fA vs n=%.0frpm (opposite of machine convention %+.0f, %lums) fab=%u",
                          (double)app_run_speed_iq_ref,
                          (double)n_fb,
                          (double)RUN_IQ_SPEED_SIGN,
-                         (unsigned long)app_run_sign_bad_ms);
+                         (unsigned long)app_run_sign_bad_ms,
+                         (unsigned)encoder_cache_get_latest()->field_abnormal_count);
             app_run_set_state(APP_RUN_STATE_FAULT);
             break;
           }
@@ -892,12 +894,13 @@ static void app_run_tick(uint32_t now_ms)
         {
           if (app_run_speed_suspect != 0U)
           {
-            app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.0f n*=%.0frpm [FB SUSPECT %lums]",
+            app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.0f n*=%.0frpm [FB SUSPECT %lums fab=%u]",
                          (double)output->measured_current_a.d,
                          (double)output->measured_current_a.q,
                          (double)mech_rpm,
                          (double)app_run_speed_cmd_rpm,
-                         (unsigned long)app_run_speed_suspect_ms);
+                         (unsigned long)app_run_speed_suspect_ms,
+                         (unsigned)encoder_cache_get_latest()->field_abnormal_count);
           }
           else
           {
