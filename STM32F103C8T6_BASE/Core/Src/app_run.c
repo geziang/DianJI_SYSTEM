@@ -52,6 +52,14 @@
 #define RUN_RPS_TO_RPM         (9.5493f)
 #define RUN_GAIN_RATIO         (1.25f)  /* 1..4 键增益调节倍率 */
 
+/* ---- 反馈合理性门（2026-09-15）：芯片级假角度流的软件生存术 ----
+ * 物理约束：本电机最大角加速度 ~5000 rad/s² ≈ 48rpm/ms，估计器为 16ms
+ * 滑窗均值、其输出单拍漂移同量级；而编码器供电被扰时输出的假角度流单拍
+ * 可跳 300+rpm。跳变超限判"反馈可疑"：冻结反馈、PI 保持输出（不撤离
+ * 也不追假），反馈回落到冻结值邻域自动恢复；可疑持续超时受控停机。 */
+#define RUN_N_JUMP_LIMIT_RPM   (100.0f) /* 距冻结值跳变上限（物理 48 的 2 倍余量） */
+#define RUN_N_SUSPECT_STOP_MS  (200U)   /* 可疑持续上限：受控停机（区别于 overspeed 跳闸） */
+
 typedef enum
 {
   APP_RUN_MODE_IQ = 0,    /* 手动 iq 阶梯（诊断用，FOC-4 已验证） */
@@ -81,6 +89,10 @@ static uint8_t app_run_exp_stage = 0U;      /* EMI 实验：0=off 1..3=A/B/C */
 static uint32_t app_run_exp_ms = 0U;
 static uint32_t app_run_exp_bad_ms = 0U;
 static uint16_t app_run_overspeed_ms = 0U;  /* overspeed 去抖累计（防单窗尖峰误跳） */
+static float app_run_speed_frozen_rpm = 0.0f; /* 反馈合理性门：冻结可信速度 */
+static uint8_t app_run_speed_have_frozen = 0U;
+static uint8_t app_run_speed_suspect = 0U;    /* 反馈可疑标志（PI/保护均吃冻结值） */
+static uint32_t app_run_speed_suspect_ms = 0U;
 static uint32_t app_run_hint_ms = 0U;
 
 static void app_run_speed_pi_configure(void);
@@ -278,6 +290,10 @@ static uint8_t app_run_enable(void)
   app_run_speed_target_rpm = 0.0f;
   app_run_speed_cmd_rpm = 0.0f;
   app_run_speed_iq_ref = 0.0f;
+  app_run_speed_frozen_rpm = 0.0f;
+  app_run_speed_have_frozen = 0U;
+  app_run_speed_suspect = 0U;
+  app_run_speed_suspect_ms = 0U;
   app_run_stall_ms = 0U;
   app_run_wrong_dir_ms = 0U;
   app_run_overspeed_ms = 0U;
@@ -670,11 +686,44 @@ static void app_run_tick(uint32_t now_ms)
         /* 目标斜坡（FR-4.3）：阶跃经 500rpm/s 爬坡，禁止直接反打。 */
         float step_rpm = RUN_SPEED_SLEW_RPM_S * RUN_SPEED_TICK_S;
         uint8_t est_ok = speed_estimator_valid(&app_run_speed_est);
+        float n_fb; /* 反馈合理性门输出：可信时=实测，可疑时=冻结值 */
 
-        /* 超速保护（FR-4.4）——速度模式专属：IQ 手动模式顶空载电压天花板
-         * （~455rpm@小电流）是正常物理，不该被拦（2026-09-13 上板教训）。
-         * 去抖 20ms：单窗尖峰（估计器已被野值拒绝兜底，此处再保险）不瞬跳。 */
-        if ((est_ok != 0U) && (fabsf(mech_rpm) > RUN_OVERSPEED_RPM))
+        /* ---- 反馈合理性门：芯片级假角度流的物理判别 ----
+         * 电机加速度物理上限 ~48rpm/ms；假角度流单拍跳 300+rpm。
+         * 跳变超限 -> 冻结反馈（PI 保持、保护不吃假数据）；
+         * 回落到冻结值邻域 -> 自动恢复。 */
+        if ((app_run_speed_have_frozen != 0U) &&
+            (fabsf(mech_rpm - app_run_speed_frozen_rpm) > RUN_N_JUMP_LIMIT_RPM))
+        {
+          if (app_run_speed_suspect_ms < 10000U)
+          {
+            app_run_speed_suspect_ms++;
+          }
+          app_run_speed_suspect = 1U;
+        }
+        else
+        {
+          app_run_speed_frozen_rpm = mech_rpm;
+          app_run_speed_have_frozen = 1U;
+          app_run_speed_suspect = 0U;
+          app_run_speed_suspect_ms = 0U;
+        }
+        n_fb = (app_run_speed_suspect != 0U) ? app_run_speed_frozen_rpm : mech_rpm;
+
+        /* 可疑持续超时：受控停机（反馈不可信时闭环不允许继续跑） */
+        if (app_run_speed_suspect_ms >= RUN_N_SUSPECT_STOP_MS)
+        {
+          app_run_safe_disable();
+          app_run_logf("[FAULT] speed feedback unreliable (suspect %lums, frozen %.0frpm)",
+                       (unsigned long)app_run_speed_suspect_ms,
+                       (double)app_run_speed_frozen_rpm);
+          app_run_set_state(APP_RUN_STATE_FAULT);
+          break;
+        }
+
+        /* 超速保护（FR-4.4）——速度模式专属且仅吃可信反馈；去抖 20ms。 */
+        if ((est_ok != 0U) && (app_run_speed_suspect == 0U) &&
+            (fabsf(n_fb) > RUN_OVERSPEED_RPM))
         {
           if (app_run_overspeed_ms < 60000U)
           {
@@ -689,7 +738,7 @@ static void app_run_tick(uint32_t now_ms)
         {
           app_run_safe_disable();
           app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f, sustained 20ms)",
-                       (double)mech_rpm, (double)RUN_OVERSPEED_RPM);
+                       (double)n_fb, (double)RUN_OVERSPEED_RPM);
           app_run_set_state(APP_RUN_STATE_FAULT);
           break;
         }
@@ -710,13 +759,14 @@ static void app_run_tick(uint32_t now_ms)
         if (est_ok != 0U)
         {
           app_run_speed_iq_ref =
-              foc_pi_update(&app_run_speed_pi, app_run_speed_cmd_rpm - mech_rpm);
+              foc_pi_update(&app_run_speed_pi, app_run_speed_cmd_rpm - n_fb);
           foc_runtime_set_current_target(0.0f, app_run_speed_iq_ref);
         }
 
-        /* 失速保护（FR-4.4）：iq 顶限 1s 不动而目标在动。 */
-        if ((est_ok != 0U) && (fabsf(app_run_speed_iq_ref) >= 0.45f) &&
-            (fabsf(mech_rpm) < 10.0f) &&
+        /* 失速保护（FR-4.4）：iq 顶限 1s 不动而目标在动（仅吃可信反馈）。 */
+        if ((est_ok != 0U) && (app_run_speed_suspect == 0U) &&
+            (fabsf(app_run_speed_iq_ref) >= 0.45f) &&
+            (fabsf(n_fb) < 10.0f) &&
             (fabsf(app_run_speed_cmd_rpm) > 50.0f))
         {
           app_run_stall_ms += 1U;
@@ -733,10 +783,11 @@ static void app_run_tick(uint32_t now_ms)
           break;
         }
 
-        /* 方向矛盾保护（FR-4.4）。 */
-        if ((est_ok != 0U) && (fabsf(app_run_speed_cmd_rpm) > 50.0f) &&
-            (fabsf(mech_rpm) > 30.0f) &&
-            ((mech_rpm * app_run_speed_cmd_rpm) < 0.0f))
+        /* 方向矛盾保护（FR-4.4，仅吃可信反馈）。 */
+        if ((est_ok != 0U) && (app_run_speed_suspect == 0U) &&
+            (fabsf(app_run_speed_cmd_rpm) > 50.0f) &&
+            (fabsf(n_fb) > 30.0f) &&
+            ((n_fb * app_run_speed_cmd_rpm) < 0.0f))
         {
           app_run_wrong_dir_ms += 1U;
         }
@@ -759,11 +810,23 @@ static void app_run_tick(uint32_t now_ms)
         output = foc_runtime_get_last_output();
         if (app_run_mode == APP_RUN_MODE_SPEED)
         {
-          app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.0f n*=%.0frpm",
-                       (double)output->measured_current_a.d,
-                       (double)output->measured_current_a.q,
-                       (double)mech_rpm,
-                       (double)app_run_speed_cmd_rpm);
+          if (app_run_speed_suspect != 0U)
+          {
+            app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.0f n*=%.0frpm [FB SUSPECT %lums]",
+                         (double)output->measured_current_a.d,
+                         (double)output->measured_current_a.q,
+                         (double)mech_rpm,
+                         (double)app_run_speed_cmd_rpm,
+                         (unsigned long)app_run_speed_suspect_ms);
+          }
+          else
+          {
+            app_run_logf("[RUN] id=%.3fA iq=%.3fA n=%.0f n*=%.0frpm",
+                         (double)output->measured_current_a.d,
+                         (double)output->measured_current_a.q,
+                         (double)mech_rpm,
+                         (double)app_run_speed_cmd_rpm);
+          }
         }
         else
         {
