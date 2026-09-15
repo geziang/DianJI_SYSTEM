@@ -80,6 +80,7 @@ static uint8_t app_run_enc_revives = 0U;    /* I2C 总线复活尝试计数 */
 static uint8_t app_run_exp_stage = 0U;      /* EMI 实验：0=off 1..3=A/B/C */
 static uint32_t app_run_exp_ms = 0U;
 static uint32_t app_run_exp_bad_ms = 0U;
+static uint16_t app_run_overspeed_ms = 0U;  /* overspeed 去抖累计（防单窗尖峰误跳） */
 static uint32_t app_run_hint_ms = 0U;
 
 static void app_run_speed_pi_configure(void);
@@ -279,6 +280,7 @@ static uint8_t app_run_enable(void)
   app_run_speed_iq_ref = 0.0f;
   app_run_stall_ms = 0U;
   app_run_wrong_dir_ms = 0U;
+  app_run_overspeed_ms = 0U;
   app_run_speed_pi_configure();
   app_run_tlm_ms = HAL_GetTick();
   debug_log_write_line("[RUN] enabled: zero-current hold (id=0 iq=0)");
@@ -670,11 +672,23 @@ static void app_run_tick(uint32_t now_ms)
         uint8_t est_ok = speed_estimator_valid(&app_run_speed_est);
 
         /* 超速保护（FR-4.4）——速度模式专属：IQ 手动模式顶空载电压天花板
-         * （~455rpm@小电流）是正常物理，不该被拦（2026-09-13 上板教训）。 */
+         * （~455rpm@小电流）是正常物理，不该被拦（2026-09-13 上板教训）。
+         * 去抖 20ms：单窗尖峰（估计器已被野值拒绝兜底，此处再保险）不瞬跳。 */
         if ((est_ok != 0U) && (fabsf(mech_rpm) > RUN_OVERSPEED_RPM))
         {
+          if (app_run_overspeed_ms < 60000U)
+          {
+            app_run_overspeed_ms++;
+          }
+        }
+        else
+        {
+          app_run_overspeed_ms = 0U;
+        }
+        if (app_run_overspeed_ms >= 20U)
+        {
           app_run_safe_disable();
-          app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f)",
+          app_run_logf("[FAULT] overspeed %.0frpm (limit %.0f, sustained 20ms)",
                        (double)mech_rpm, (double)RUN_OVERSPEED_RPM);
           app_run_set_state(APP_RUN_STATE_FAULT);
           break;
