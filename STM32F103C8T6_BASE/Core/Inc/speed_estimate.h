@@ -16,7 +16,10 @@ extern "C" {
 
 #include <stdint.h>
 
-#define SPEED_EST_WINDOW_N (16U) /* 16 拍 @1ms = 16ms 窗：~1rpm 分辨率，~8ms 群延迟 */
+#define SPEED_EST_WINDOW_N (100U) /* 100 拍 @1ms = 100ms 窗（owner 2026-09-15 拍板）：
+                                     稀释几十 ms 级垃圾爆发（50ms 爆发最多占窗一半，
+                                     读数缓升不瞬跳、不触发合理性门）；群延迟 ~50ms，
+                                     速度环带宽降至 ~5Hz——与保守 PI 匹配。 */
 
 typedef struct
 {

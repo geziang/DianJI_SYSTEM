@@ -45,9 +45,9 @@
 #define RUN_SPEED_LIMIT_RPM    (450.0f) /* 目标限幅 450rpm（owner 2026-09-15 放宽）：10V 母线空载天花板 ~550rpm 内留整定空间 */
 #define RUN_SPEED_SLEW_RPM_S   (500.0f) /* 目标斜坡（FR-4.3 加速度限首版值） */
 #define RUN_OVERSPEED_RPM      (580.0f) /* 超速保护（FR-4.4）：580rpm=物理天花板(~550)+余量 */
-#define RUN_SPEED_KP_INIT      (0.0025f) /* A/rpm：保守起步（owner 2026-09-15 拍板从 0.005 减半——
-                                          * 电流阶跃越小开关噪声越小，编码器说谎概率下降；1 键往上走） */
-#define RUN_SPEED_KI_INIT      (0.0125f) /* A/(rpm·s)，随 kp 同比减半 */
+#define RUN_SPEED_KP_INIT      (0.0015f) /* A/rpm：保守起步（owner 2026-09-15 拍板再降——
+                                          * SUSPECT 期大电流会自我放大噪声，先小后大往上走） */
+#define RUN_SPEED_KI_INIT      (0.008f)  /* A/(rpm·s)，随 kp 同步下调 */
 #define RUN_SPEED_STEP_RPM     (20.0f)
 #define RUN_SPEED_TICK_S       (0.001f) /* 速度外环拍周期=主循环 1ms */
 #define RUN_RPS_TO_RPM         (9.5493f)
@@ -764,17 +764,32 @@ static void app_run_tick(uint32_t now_ms)
 
         if (est_ok != 0U)
         {
-          float iq_raw = foc_pi_update(&app_run_speed_pi,
-                                       app_run_speed_cmd_rpm - n_fb);
-          /* 低通状态永不清零；死区只作用于输出副本——死区清滤波状态会把
-           * 单步增量(α×满幅=0.025A)永远压在死区(0.03A)以下，输出被钉死
-           * 在零（2026-09-15 上板实锤：目标 300rpm 电机不动）。 */
-          app_run_iq_ref_filt +=
-              RUN_IQ_REF_LP_ALPHA * (iq_raw - app_run_iq_ref_filt);
-          app_run_speed_iq_ref =
-              (fabsf(app_run_iq_ref_filt) < RUN_IQ_REF_DEADBAND_A)
-                  ? 0.0f
-                  : app_run_iq_ref_filt;
+          if (app_run_speed_suspect != 0U)
+          {
+            /* 反馈不可信期：不吃（可能被污染的冻结值）误差——跳过 PI（积分
+             * 器冻结防饱和），输出以 ~20ms 时间常数向零回收（滑行去激励）。
+             * 上板实锤：SUSPECT 期 PI 吃假冻结值把 iq 打到 0.32A 自我维持爆发。 */
+            app_run_iq_ref_filt *= 0.95f;
+            if (fabsf(app_run_iq_ref_filt) < RUN_IQ_REF_DEADBAND_A)
+            {
+              app_run_iq_ref_filt = 0.0f;
+            }
+            app_run_speed_iq_ref = app_run_iq_ref_filt;
+          }
+          else
+          {
+            float iq_raw = foc_pi_update(&app_run_speed_pi,
+                                         app_run_speed_cmd_rpm - n_fb);
+            /* 低通状态永不清零；死区只作用于输出副本——死区清滤波状态会把
+             * 单步增量(α×满幅=0.025A)永远压在死区(0.03A)以下，输出被钉死
+             * 在零（2026-09-15 上板实锤：目标 300rpm 电机不动）。 */
+            app_run_iq_ref_filt +=
+                RUN_IQ_REF_LP_ALPHA * (iq_raw - app_run_iq_ref_filt);
+            app_run_speed_iq_ref =
+                (fabsf(app_run_iq_ref_filt) < RUN_IQ_REF_DEADBAND_A)
+                    ? 0.0f
+                    : app_run_iq_ref_filt;
+          }
           foc_runtime_set_current_target(0.0f, app_run_speed_iq_ref);
         }
 
